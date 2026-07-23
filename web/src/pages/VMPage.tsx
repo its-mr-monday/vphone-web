@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks } from "lucide-react";
+import { api } from "../api/client";
 import { useVM } from "../hooks/useVM";
 import { useJobs } from "../hooks/useJobs";
 import { VMDisplay } from "../components/vm/VMDisplay";
@@ -108,12 +110,28 @@ export function VMPage() {
 }
 
 function InfoPanel({ vm }: { vm: VM }) {
+  const running = vm.status === "RUNNING";
+  // Live guest metadata (IP address, reported iOS) from the control socket.
+  const { data: guest } = useQuery({
+    queryKey: ["vm-info", vm.id],
+    queryFn: () => api.guestInfo(vm.id),
+    enabled: running,
+    // The guest reports its IP only after its daemon connects; poll until known.
+    refetchInterval: (q) => ((q.state.data as { ip?: string } | undefined)?.ip ? 30000 : 3000),
+    retry: false,
+  });
+
+  const ipAddress = running
+    ? guest?.ip ?? (guest ? "acquiring…" : "waiting for guest…")
+    : "—";
+
   const rows: [string, string][] = [
     ["ID", vm.id],
     ["Name", vm.name],
     ["Status", vm.status],
+    ["IP Address", ipAddress],
     ["Variant", vm.variant],
-    ["iOS Version", vm.ios_version || "—"],
+    ["iOS Version", guest?.ios || vm.ios_version || "—"],
     [
       "Network",
       vm.network_mode === "bridged"

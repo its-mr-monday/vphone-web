@@ -45,6 +45,19 @@ type socketResponse struct {
 	Path  string `json:"path,omitempty"`
 	Error string `json:"error,omitempty"`
 	Image string `json:"image,omitempty"` // base64 grayscale JPEG (compact)
+	// info command fields:
+	Connected bool   `json:"connected,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	IOS       string `json:"ios,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+// GuestInfo holds metadata the guest reports over the vsock control handshake.
+type GuestInfo struct {
+	Connected bool   `json:"connected"`
+	IP        string `json:"ip,omitempty"`
+	IOS       string `json:"ios,omitempty"`
+	Name      string `json:"name,omitempty"`
 }
 
 // send issues one request and returns the decoded response.
@@ -167,6 +180,21 @@ var keyAlias = map[string]string{
 	"volume_down": "voldown",
 	"volumedown":  "voldown",
 	"voldown":     "voldown",
+}
+
+// Info returns guest metadata (IP address, iOS version, name) as learned from
+// the vsock control handshake. Available once the guest daemon has connected.
+func (s *Socket) Info() (GuestInfo, error) {
+	resp, err := s.send(map[string]any{"t": "info"})
+	if err != nil {
+		return GuestInfo{}, err
+	}
+	return GuestInfo{
+		Connected: resp.Connected,
+		IP:        resp.IP,
+		IOS:       resp.IOS,
+		Name:      resp.Name,
+	}, nil
 }
 
 // Type sets the guest clipboard text (the only clipboard op the socket exposes).

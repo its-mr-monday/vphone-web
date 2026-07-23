@@ -48,6 +48,14 @@ export interface VM {
 
 export type NetworkMode = "nat" | "bridged" | "hostOnly" | "none";
 
+/** Live guest metadata read from a running VM's control socket. */
+export interface GuestInfo {
+  connected: boolean;
+  ip?: string;
+  ios?: string;
+  name?: string;
+}
+
 export interface CreateVMRequest {
   name: string;
   variant: Variant;
@@ -201,6 +209,7 @@ export const api = {
   key: (id: string, key: string) =>
     request<{ ok: boolean }>(`/vms/${id}/key`, { method: "POST", body: JSON.stringify({ key }) }),
   screenshotURL: (id: string) => `/api/v1/vms/${id}/screenshot`,
+  guestInfo: (id: string) => request<GuestInfo>(`/vms/${id}/info`),
 
   // Jobs
   listJobs: (vmID?: string, limit = 100) =>

@@ -47,6 +47,21 @@ func (s *Server) screenshot(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(png)
 }
 
+// guestInfo handles GET /api/v1/vms/:id/info — live guest metadata (IP address,
+// iOS version) read from the running VM's control socket.
+func (s *Server) guestInfo(w http.ResponseWriter, r *http.Request) {
+	v, ok := s.runningVM(w, r)
+	if !ok {
+		return
+	}
+	info, err := s.vms.Socket(v).Info()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 // touchRequest is the POST /api/v1/vms/:id/touch body.
 type touchRequest struct {
 	Type string  `json:"type"` // "tap" (default) or "swipe"
