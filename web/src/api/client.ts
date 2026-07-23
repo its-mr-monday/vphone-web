@@ -243,6 +243,8 @@ export const api = {
   fridaStart: (id: string) => request<FridaStatus>(`/vms/${id}/frida/start`, { method: "POST" }),
   fridaStop: (id: string) => request<FridaStatus>(`/vms/${id}/frida/stop`, { method: "POST" }),
   fridaProcesses: (id: string) => request<FridaProcess[]>(`/vms/${id}/frida/processes`),
+  fridaSetPort: (id: string, port: number) =>
+    request<VM>(`/vms/${id}/frida/port`, { method: "POST", body: JSON.stringify({ port }) }),
 
   // Jobs
   listJobs: (vmID?: string, limit = 100) =>

@@ -26,7 +26,7 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 	if err := s.Scan(
 		&v.ID, &v.Name, &v.Status, &v.Variant, &v.IOSVersion, &v.IPSWID,
 		&v.NetworkMode, &v.NetworkInterface, &v.CPU, &v.Memory, &v.DiskSize,
-		&v.PortBlockBase, &v.VMDir, &v.PID, &v.ErrorMessage, &createdAt, &updatedAt,
+		&v.PortBlockBase, &v.FridaPort, &v.VMDir, &v.PID, &v.ErrorMessage, &createdAt, &updatedAt,
 	); err != nil {
 		return VM{}, err
 	}
@@ -38,6 +38,9 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 		return VM{}, fmt.Errorf("parse updated_at: %w", err)
 	}
 	v.Ports = blockFor(v.PortBlockBase)
+	if v.FridaPort > 0 {
+		v.Ports.Frida = v.FridaPort // per-VM override of the forwarded Frida port
+	}
 	v.ScreenWidth = DefaultScreenWidth
 	v.ScreenHeight = DefaultScreenHeight
 	v.VNCPassword = vncPassword
@@ -45,16 +48,16 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 }
 
 const vmColumns = `id, name, status, variant, ios_version, ipsw_id, network_mode,
-	network_interface, cpu, memory, disk_size, port_block_base, vm_dir, pid,
+	network_interface, cpu, memory, disk_size, port_block_base, frida_port, vm_dir, pid,
 	error_message, created_at, updated_at`
 
 // insert persists a new VM.
 func (s *store) insert(v VM) error {
 	_, err := s.db.Exec(
 		`INSERT INTO vms (`+vmColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.ID, v.Name, v.Status, v.Variant, v.IOSVersion, v.IPSWID, v.NetworkMode,
-		v.NetworkInterface, v.CPU, v.Memory, v.DiskSize, v.PortBlockBase, v.VMDir,
+		v.NetworkInterface, v.CPU, v.Memory, v.DiskSize, v.PortBlockBase, v.FridaPort, v.VMDir,
 		v.PID, v.ErrorMessage, v.CreatedAt.Format(rfc3339), v.UpdatedAt.Format(rfc3339),
 	)
 	if err != nil {
@@ -127,6 +130,21 @@ func (s *store) updateConfig(id, name string, cpu, memory int, netMode, netIface
 		name, cpu, memory, netMode, netIface, at.Format(rfc3339), id)
 	if err != nil {
 		return fmt.Errorf("update vm config: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// setFridaPort persists a per-VM override for the forwarded frida-server port.
+func (s *store) setFridaPort(id string, port int, at time.Time) error {
+	res, err := s.db.Exec(
+		`UPDATE vms SET frida_port = ?, updated_at = ? WHERE id = ?`,
+		port, at.Format(rfc3339), id)
+	if err != nil {
+		return fmt.Errorf("update frida port: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

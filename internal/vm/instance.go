@@ -93,7 +93,10 @@ type VM struct {
 	Memory           int       `json:"memory"`    // MiB
 	DiskSize         int       `json:"disk_size"` // MiB
 	PortBlockBase    int       `json:"port_block_base"`
-	VMDir            string    `json:"vm_dir"`
+	// FridaPort overrides the host port forwarded to the guest's frida-server.
+	// 0 means "use the default" (port block base + 4).
+	FridaPort int    `json:"frida_port"`
+	VMDir     string `json:"vm_dir"`
 	PID              int       `json:"pid,omitempty"`
 	ErrorMessage     string    `json:"error_message,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -120,6 +123,10 @@ type runtime struct {
 	tunnelStop chan struct{}
 	tunnelOnce sync.Once
 	tunnelWG   sync.WaitGroup
+	// The Frida forward has its own stop channel so its port can be changed live
+	// (restart just this forward) without disturbing the core tunnels.
+	fridaStop chan struct{}
+	fridaWG   sync.WaitGroup
 }
 
 // stopTunnelSupervisors signals all tunnel goroutines to exit (idempotent).
@@ -129,6 +136,19 @@ func (r *runtime) stopTunnelSupervisors() {
 			close(r.tunnelStop)
 		}
 	})
+	r.stopFridaForward()
+}
+
+// stopFridaForward signals just the Frida forward to exit and clears its stop
+// channel so it can be relaunched (for a live port change).
+func (r *runtime) stopFridaForward() {
+	r.mu.Lock()
+	stop := r.fridaStop
+	r.fridaStop = nil
+	r.mu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 }
 
 // ringLog is a tiny bounded line buffer for capturing recent process output.

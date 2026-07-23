@@ -208,6 +208,61 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	return v, nil
 }
 
+// SetFridaPort sets the host port that forwards to the guest's frida-server.
+// port 0 restores the default (block base + 4). If the VM is running the forward
+// is restarted immediately on the new port; the core tunnels are untouched.
+func (m *Manager) SetFridaPort(id string, port int) (VM, error) {
+	v, err := m.store.get(id)
+	if err != nil {
+		return VM{}, err
+	}
+	if port != 0 {
+		if port < 1024 || port > 65535 {
+			return VM{}, fmt.Errorf("frida port %d out of range (1024-65535)", port)
+		}
+		// Avoid colliding with this VM's other forwarded ports.
+		for _, p := range []int{v.Ports.VNC, v.Ports.SSH, v.Ports.SSH2, v.Ports.RPC} {
+			if port == p {
+				return VM{}, fmt.Errorf("frida port %d conflicts with another port for this VM", port)
+			}
+		}
+		// Avoid colliding with any other VM's assigned ports.
+		others, _ := m.store.list()
+		for _, o := range others {
+			if o.ID == id {
+				continue
+			}
+			for _, p := range []int{o.Ports.VNC, o.Ports.SSH, o.Ports.SSH2, o.Ports.RPC, o.Ports.Frida} {
+				if port == p {
+					return VM{}, fmt.Errorf("frida port %d is already used by VM %q", port, o.Name)
+				}
+			}
+		}
+	}
+
+	if err := m.store.setFridaPort(id, port, time.Now()); err != nil {
+		return VM{}, err
+	}
+	updated, err := m.store.get(id)
+	if err != nil {
+		return VM{}, err
+	}
+
+	// Apply live: restart just the Frida forward on the new port.
+	if updated.Status == StatusRunning {
+		m.mu.Lock()
+		rt := m.runtimes[id]
+		m.mu.Unlock()
+		if rt != nil {
+			rt.stopFridaForward()
+			rt.fridaWG.Wait()
+			m.startFridaForward(updated, rt)
+		}
+	}
+	m.log.Info("set frida port", "id", id, "port", updated.Ports.Frida)
+	return updated, nil
+}
+
 // UpdateConfigParams are the user-editable VM settings. Only applied while the
 // VM is STOPPED. Zero/empty fields fall back to the current value.
 type UpdateConfigParams struct {
@@ -621,21 +676,16 @@ func (m *Manager) makeEnv(extra []string) []string {
 // until the VM stops — so VNC/SSH connect automatically the moment the device
 // is reachable.
 func (m *Manager) startTunnels(v VM, rt *runtime) {
-	type fwd struct {
-		hostPort int
-		vmPort   int
-		label    string
-	}
 	// dropbear (22222) works out of the box on every variant — its host keys are
 	// generated on first boot (JB via vphone_jb_setup, others via `dropbear -R`).
 	// openssh (22) is an optional extra on JB after a Sileo install. The terminal
-	// dials the primary SSH port (→ 22222), so forward both.
-	forwards := []fwd{
-		{v.Ports.SSH, 22222, "ssh-dropbear"},
-		{v.Ports.SSH2, 22, "ssh-openssh"},
-		{v.Ports.VNC, 5901, "vnc"},
-		{v.Ports.RPC, 5910, "rpc"},
-		{v.Ports.Frida, 27042, "frida"},
+	// dials the primary SSH port (→ 22222), so forward both. VNC/SSH/RPC stay on
+	// loopback (reached through the web proxy).
+	core := []forwardSpec{
+		{v.Ports.SSH, 22222, "ssh-dropbear", ""},
+		{v.Ports.SSH2, 22, "ssh-openssh", ""},
+		{v.Ports.VNC, 5901, "vnc", ""},
+		{v.Ports.RPC, 5910, "rpc", ""},
 	}
 
 	rt.mu.Lock()
@@ -645,57 +695,92 @@ func (m *Manager) startTunnels(v VM, rt *runtime) {
 	stop := rt.tunnelStop
 	rt.mu.Unlock()
 
-	py := filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin", "python3")
-	for _, f := range forwards {
-		f := f
+	for _, f := range core {
 		rt.tunnelWG.Add(1)
+		go m.superviseForward(v, stop, &rt.tunnelWG, f)
+	}
+
+	// The Frida forward runs on its own stop channel so its port can be changed
+	// live (SetFridaPort) without disturbing the core tunnels.
+	m.startFridaForward(v, rt)
+}
+
+// forwardSpec describes a single host→guest usbmux forward.
+type forwardSpec struct {
+	hostPort int
+	vmPort   int
+	label    string
+	bindHost string // interface to bind on the host ("" → 127.0.0.1)
+}
+
+// startFridaForward launches (or relaunches) the Frida forward for a VM on its
+// own stop channel. The port binds 0.0.0.0 so external Frida tooling on the
+// operator's own machine can attach via `frida -H <host>:<port>`.
+func (m *Manager) startFridaForward(v VM, rt *runtime) {
+	rt.mu.Lock()
+	if rt.fridaStop == nil {
+		rt.fridaStop = make(chan struct{})
+	}
+	stop := rt.fridaStop
+	rt.mu.Unlock()
+
+	rt.fridaWG.Add(1)
+	go m.superviseForward(v, stop, &rt.fridaWG, forwardSpec{v.Ports.Frida, 27042, "frida", "0.0.0.0"})
+}
+
+// superviseForward keeps a single usbmux forward alive until stop is closed,
+// restarting it whenever the underlying process exits (the guest endpoint only
+// appears once iOS has booted far enough).
+func (m *Manager) superviseForward(v VM, stop <-chan struct{}, wg *sync.WaitGroup, f forwardSpec) {
+	defer wg.Done()
+	py := filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin", "python3")
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		// usbmux forward [--host BIND] <HOST_PORT> <DEVICE_PORT>
+		args := []string{"-m", "pymobiledevice3", "usbmux", "forward"}
+		if f.bindHost != "" {
+			args = append(args, "--host", f.bindHost)
+		}
+		args = append(args, strconv.Itoa(f.hostPort), strconv.Itoa(f.vmPort))
+		cmd := exec.Command(py, args...)
+		cmd.Dir = v.VMDir
+		cmd.Env = m.makeEnv(nil)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			m.log.Debug("tunnel start failed; retrying", "vm", v.ID, "service", f.label, "err", err)
+			if sleepOrStop(stop, 2*time.Second) {
+				return
+			}
+			continue
+		}
+
+		// Kill the tunnel process when stop fires.
+		exited := make(chan struct{})
 		go func() {
-			defer rt.tunnelWG.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
+			select {
+			case <-stop:
+				if cmd.Process != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 				}
-				// usbmux forward <HOST_PORT> <DEVICE_PORT>
-				cmd := exec.Command(py, "-m", "pymobiledevice3", "usbmux", "forward",
-					strconv.Itoa(f.hostPort), strconv.Itoa(f.vmPort))
-				cmd.Dir = v.VMDir
-				cmd.Env = m.makeEnv(nil)
-				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-				if err := cmd.Start(); err != nil {
-					m.log.Debug("tunnel start failed; retrying", "vm", v.ID, "service", f.label, "err", err)
-					if sleepOrStop(stop, 2*time.Second) {
-						return
-					}
-					continue
-				}
-
-				// Kill the tunnel process when stop fires.
-				exited := make(chan struct{})
-				go func() {
-					select {
-					case <-stop:
-						if cmd.Process != nil {
-							_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-						}
-					case <-exited:
-					}
-				}()
-				_ = cmd.Wait()
-				close(exited)
-
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				// Tunnel dropped (device not up yet or connection lost) — retry.
-				if sleepOrStop(stop, 2*time.Second) {
-					return
-				}
+			case <-exited:
 			}
 		}()
+		_ = cmd.Wait()
+		close(exited)
+
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		// Tunnel dropped (device not up yet or connection lost) — retry.
+		if sleepOrStop(stop, 2*time.Second) {
+			return
+		}
 	}
 }
 
@@ -808,6 +893,7 @@ func (m *Manager) Stop(id string) error {
 func (m *Manager) killTunnels(rt *runtime) {
 	rt.stopTunnelSupervisors()
 	rt.tunnelWG.Wait()
+	rt.fridaWG.Wait()
 }
 
 // Ports returns the derived port block for a VM's stored base.

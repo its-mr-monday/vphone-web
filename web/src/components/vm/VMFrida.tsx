@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, Play, Square, RefreshCw, Bug, Search } from "lucide-react";
+import { Download, Play, Square, RefreshCw, Bug, Search, Copy, Check, Plug, Settings2 } from "lucide-react";
 import { api, type VM, type FridaProcess } from "../../api/client";
 import { useAuth } from "../../hooks/useAuth";
 import { Button } from "../ui/Button";
@@ -36,6 +36,13 @@ export function VMFrida({ vm }: { vm: VM }) {
     mutationFn: () => api.fridaInstall(vm.id),
     onSuccess: (d) => setInstallJob(d.job_id),
   });
+  const setPort = useMutation({
+    mutationFn: (port: number) => api.fridaSetPort(vm.id, port),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["frida", vm.id] });
+      qc.invalidateQueries({ queryKey: ["vms", vm.id] });
+    },
+  });
 
   const procs = useQuery({
     queryKey: ["frida-procs", vm.id],
@@ -70,8 +77,20 @@ export function VMFrida({ vm }: { vm: VM }) {
           <Stat label="Installed" value={st?.installed ? "yes" : "no"} good={st?.installed} />
           <Stat label="Running" value={st?.running ? "yes" : "no"} good={st?.running} />
           {st?.version && <Stat label="Version" value={st.version} />}
-          <Stat label="Host port" value={st ? `127.0.0.1:${st.port}` : "—"} accent />
+          {st && (
+            <PortEditor
+              port={st.port}
+              editable={isAdmin}
+              pending={setPort.isPending}
+              onSave={(p) => setPort.mutate(p)}
+            />
+          )}
         </div>
+        {setPort.error && (
+          <div className="mt-2 font-mono text-[11px] text-error">
+            {setPort.error instanceof Error ? setPort.error.message : "failed to set port"}
+          </div>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {isAdmin && (
@@ -124,6 +143,9 @@ export function VMFrida({ vm }: { vm: VM }) {
         )}
       </div>
 
+      {/* Remote access — connect external Frida tooling directly. */}
+      {st?.running && <RemoteAccess port={st.port} />}
+
       {/* Process list */}
       <div className="flex min-h-0 flex-1 flex-col rounded-md border border-border bg-surface p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -152,6 +174,125 @@ export function VMFrida({ vm }: { vm: VM }) {
           <Empty text="Click Enumerate to list running apps via frida-ps." small />
         )}
       </div>
+    </div>
+  );
+}
+
+function PortEditor({
+  port,
+  editable,
+  pending,
+  onSave,
+}: {
+  port: number;
+  editable: boolean;
+  pending: boolean;
+  onSave: (port: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(port));
+
+  if (!editable || !editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-widest text-fg-dim">Forward port</span>
+        <span className="text-accent">127.0.0.1:{port}</span>
+        {editable && (
+          <button
+            onClick={() => {
+              setValue(String(port));
+              setEditing(true);
+            }}
+            className="text-fg-dim hover:text-accent"
+            title="Change the forwarded Frida port"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] uppercase tracking-widest text-fg-dim">Forward port</span>
+      <input
+        autoFocus
+        type="number"
+        min={1024}
+        max={65535}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && (onSave(Number(value)), setEditing(false))}
+        className="w-24 rounded-sm border border-border bg-base px-2 py-0.5 text-xs text-fg outline-none focus:border-accent"
+      />
+      <button
+        onClick={() => {
+          onSave(Number(value));
+          setEditing(false);
+        }}
+        disabled={pending}
+        className="rounded-sm border border-accent/60 bg-accent/10 px-2 py-0.5 text-[10px] uppercase text-accent"
+      >
+        {pending ? "…" : "Save"}
+      </button>
+      <button onClick={() => setEditing(false)} className="text-[10px] uppercase text-fg-dim hover:text-fg">
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+function RemoteAccess({ port }: { port: number }) {
+  // The address the operator reached this UI on is, by construction, a host that
+  // can route to the vphone-web server; the Frida port is bound on 0.0.0.0.
+  const host = window.location.hostname || "127.0.0.1";
+  const target = `${host}:${port}`;
+  const examples: [string, string][] = [
+    ["List apps", `frida-ps -H ${target} -a`],
+    ["Attach REPL", `frida -H ${target} -n SpringBoard`],
+    ["Spawn + trace", `frida-trace -H ${target} -f com.apple.mobilesafari -i "open*"`],
+    ["Python", `frida.get_device_manager().add_remote_device("${target}")`],
+  ];
+  return (
+    <div className="rounded-md border border-border bg-surface p-4">
+      <h3 className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+        <Plug className="h-3.5 w-3.5" /> Remote access
+      </h3>
+      <p className="mb-3 font-mono text-[11px] text-fg-dim">
+        frida-server is exposed on this host. Point any Frida tool at it from your machine:
+      </p>
+      <CopyRow label="Target" value={target} />
+      <div className="mt-3 space-y-1.5">
+        {examples.map(([label, cmd]) => (
+          <CopyRow key={label} label={label} value={cmd} mono />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CopyRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-24 shrink-0 font-mono text-[10px] uppercase tracking-widest text-fg-dim">{label}</span>
+      <code className={`flex-1 overflow-x-auto whitespace-nowrap rounded-sm border border-border bg-base px-2 py-1 text-xs text-accent ${mono ? "" : ""}`}>
+        {value}
+      </code>
+      <button
+        onClick={copy}
+        className="shrink-0 rounded-sm border border-border p-1.5 text-fg-dim hover:text-accent"
+        title="Copy"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
     </div>
   );
 }
