@@ -26,3 +26,6 @@
 
 # Local env (secrets)
 .env
+
+# stray root build artifact (real output is bin/vphone-web)
+/vphone-web

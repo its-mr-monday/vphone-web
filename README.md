@@ -134,12 +134,22 @@ for custom IPSWs). The restore phase runs `make boot_dfu` in the background,
 waits for the DFU-ready marker, runs `restore_get_shsh` + `restore`, then tears
 down the DFU process — coordinated with context cancellation so nothing leaks.
 
+## Documentation
+
+In-depth guides live in [`docs/`](docs/README.md):
+
+- [Getting started](docs/01-getting-started.md) · [Your first VM](docs/02-first-vm.md) · [Connecting](docs/03-connecting.md)
+- [Managing VMs](docs/04-managing-vms.md) · [Frida & debugging](docs/05-frida-debugging.md)
+- [Configuration reference](docs/06-configuration.md) · [Clustering](docs/07-clustering.md) · [Access control](docs/08-access-control.md)
+- [API reference](docs/09-api-reference.md) · [Troubleshooting](docs/10-troubleshooting.md)
+
 ## Configuration
 
 Copy `config.example.toml` to `~/.config/vphone-web/config.toml`. Every field has
 a default; any value can be overridden with a `VPHONE_WEB_*` environment variable
 (e.g. `VPHONE_WEB_PORT=9090`). Key limits: `max_concurrent_vms` (enforced at boot,
-409 when full) and `max_concurrent_jobs` (extra jobs queue as PENDING).
+409 when full) and `max_concurrent_jobs` (extra jobs queue as PENDING). See the
+[full configuration reference](docs/06-configuration.md).
 
 ## API
 
