@@ -41,6 +41,7 @@ func (m *Manager) provision(v VM, ipswPath string) {
 			"CPU=" + strconv.Itoa(v.CPU),
 			"MEMORY=" + strconv.Itoa(v.Memory),
 			"DISK_SIZE=" + strconv.Itoa(diskGiB(v.DiskSize)),
+			"NETWORK_MODE=" + networkModeOrDefault(v.NetworkMode),
 		},
 	})); err != nil {
 		m.failStep(v.ID, "vm_new", err)
@@ -290,6 +291,14 @@ func cfwInstallTarget(v Variant) string {
 	default:
 		return "cfw_install"
 	}
+}
+
+// networkModeOrDefault returns the VM's network mode, defaulting to nat.
+func networkModeOrDefault(m string) string {
+	if m == "" {
+		return "nat"
+	}
+	return m
 }
 
 // diskGiB converts a MiB disk size to whole GiB (the unit `make vm_new` expects),

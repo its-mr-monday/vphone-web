@@ -114,6 +114,7 @@ function InfoPanel({ vm }: { vm: VM }) {
     ["Status", vm.status],
     ["Variant", vm.variant],
     ["iOS Version", vm.ios_version || "—"],
+    ["Network", vm.network_mode === "bridged" ? "Bridged (LAN)" : vm.network_mode || "nat"],
     ["CPU cores", String(vm.cpu)],
     ["Memory", `${vm.memory} MiB`],
     ["Disk", `${vm.disk_size} MiB`],

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Check, HardDriveDownload, Cpu } from "lucide-react";
-import { ApiError, formatBytes, type Variant } from "../api/client";
+import { ApiError, formatBytes, type Variant, type NetworkMode } from "../api/client";
 import { useIPSWs } from "../hooks/useIPSW";
 import { useCreateVM } from "../hooks/useVM";
 import { Button } from "../components/ui/Button";
@@ -25,6 +25,7 @@ export function CreateVMPage() {
   const [cpu, setCpu] = useState(4);
   const [memory, setMemory] = useState(4096);
   const [disk, setDisk] = useState(16384);
+  const [network, setNetwork] = useState<NetworkMode>("nat");
   const [error, setError] = useState<string | null>(null);
 
   const ready = (ipsws ?? []).filter((i) => i.status === "READY" || i.status === "REGISTERED");
@@ -40,6 +41,7 @@ export function CreateVMPage() {
         variant,
         ios_version: selectedIpsw?.version ?? "",
         ipsw_id: ipswId || undefined,
+        network_mode: network,
         cpu,
         memory,
         disk_size: disk,
@@ -162,6 +164,28 @@ export function CreateVMPage() {
                 <Num label="RAM (MiB)" value={memory} onChange={setMemory} min={1024} max={65536} step={512} />
                 <Num label="Disk (MiB)" value={disk} onChange={setDisk} min={4096} max={262144} step={1024} />
               </div>
+
+              <div className="mt-4">
+                <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">Network</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { v: "nat", label: "NAT (shared)", desc: "private 192.168.64.x, host-only reachable" },
+                    { v: "bridged", label: "Bridged (LAN)", desc: "own DHCP lease on your subnet — direct SSH from peers" },
+                  ] as { v: NetworkMode; label: string; desc: string }[]).map((n) => (
+                    <button
+                      key={n.v}
+                      type="button"
+                      onClick={() => setNetwork(n.v)}
+                      className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                        network === n.v ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
+                      }`}
+                    >
+                      <div className="font-mono text-xs text-fg">{n.label}</div>
+                      <div className="font-mono text-[10px] text-fg-dim">{n.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <style>{wizInputStyle}</style>
             </Section>
           )}
@@ -172,6 +196,7 @@ export function CreateVMPage() {
                 <Row k="Name" v={name || "—"} />
                 <Row k="Firmware" v={selectedIpsw ? `${selectedIpsw.version} (${selectedIpsw.build})` : "none (bare)"} />
                 <Row k="Variant" v={VARIANTS.find((v) => v.value === variant)!.label} />
+                <Row k="Network" v={network === "bridged" ? "Bridged (LAN)" : "NAT (shared)"} />
                 <Row k="CPU" v={`${cpu} cores`} />
                 <Row k="Memory" v={`${memory} MiB`} />
                 <Row k="Disk" v={`${disk} MiB`} />

@@ -29,6 +29,7 @@ export interface VM {
   variant: Variant;
   ios_version: string;
   ipsw_id?: string;
+  network_mode: string;
   cpu: number;
   memory: number;
   disk_size: number;
@@ -44,11 +45,14 @@ export interface VM {
   vnc_password: string;
 }
 
+export type NetworkMode = "nat" | "bridged" | "hostOnly" | "none";
+
 export interface CreateVMRequest {
   name: string;
   variant: Variant;
   ios_version?: string;
   ipsw_id?: string;
+  network_mode?: NetworkMode;
   cpu?: number;
   memory?: number;
   disk_size?: number;

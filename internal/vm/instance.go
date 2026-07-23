@@ -70,6 +70,7 @@ type VM struct {
 	Variant       Variant   `json:"variant"`
 	IOSVersion    string    `json:"ios_version"`
 	IPSWID        string    `json:"ipsw_id,omitempty"`
+	NetworkMode   string    `json:"network_mode"` // nat | bridged | hostOnly | none
 	CPU           int       `json:"cpu"`
 	Memory        int       `json:"memory"`    // MiB
 	DiskSize      int       `json:"disk_size"` // MiB

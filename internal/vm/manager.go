@@ -100,14 +100,18 @@ func (m *Manager) RunningCount() (int, error) {
 
 // CreateParams are the inputs for creating a VM.
 type CreateParams struct {
-	Name       string
-	Variant    Variant
-	IOSVersion string
-	IPSWID     string // when set, the full provisioning pipeline runs
-	CPU        int
-	Memory     int
-	DiskSize   int
+	Name        string
+	Variant     Variant
+	IOSVersion  string
+	IPSWID      string // when set, the full provisioning pipeline runs
+	NetworkMode string // nat | bridged | hostOnly | none (default nat)
+	CPU         int
+	Memory      int
+	DiskSize    int
 }
+
+// validNetworkModes is the set of accepted network modes.
+var validNetworkModes = map[string]bool{"nat": true, "bridged": true, "hostOnly": true, "none": true}
 
 // Create provisions a new VM. It inserts the record (status CREATING), allocates
 // ports, and launches the provisioning pipeline in the background. The VM is
@@ -133,6 +137,12 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	}
 	if p.DiskSize <= 0 {
 		p.DiskSize = 16384
+	}
+	if p.NetworkMode == "" {
+		p.NetworkMode = "nat"
+	}
+	if !validNetworkModes[p.NetworkMode] {
+		return VM{}, fmt.Errorf("invalid network mode %q", p.NetworkMode)
 	}
 
 	// Resolve the IPSW path up front so we fail fast on a bad reference.
@@ -168,6 +178,7 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		Variant:       p.Variant,
 		IOSVersion:    p.IOSVersion,
 		IPSWID:        p.IPSWID,
+		NetworkMode:   p.NetworkMode,
 		CPU:           p.CPU,
 		Memory:        p.Memory,
 		DiskSize:      p.DiskSize,
@@ -236,6 +247,7 @@ func (m *Manager) Import(p ImportParams) (VM, error) {
 		Status:        StatusStopped,
 		Variant:       p.Variant,
 		IOSVersion:    p.IOSVersion,
+		NetworkMode:   "nat",
 		CPU:           6,
 		Memory:        6144,
 		DiskSize:      32768,
