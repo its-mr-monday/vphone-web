@@ -98,18 +98,20 @@ type ServerConfig struct {
 	DevProxy string `toml:"dev_proxy"`
 	// HeadlessVMs boots VMs without a host window (web console / VNC only).
 	HeadlessVMs bool `toml:"headless_vms"`
-	// TLSCert/TLSKey are PEM file paths. When both are set the server (and, in
-	// --agent mode, the control link) is served over HTTPS.
+	// TLSEnabled turns on HTTPS for the web console (and, in --agent mode, the
+	// control link). When true and TLSCert/TLSKey are set, those PEM files are
+	// used (real/signed certs for production); when true with no cert/key, the
+	// server generates an in-memory self-signed cert (handy for labs/agents).
+	TLSEnabled bool `toml:"tls_enabled"`
+	// TLSCert/TLSKey are PEM file paths, used when TLSEnabled and both are set.
 	TLSCert string `toml:"tls_cert"`
 	TLSKey  string `toml:"tls_key"`
-	// TLSSelfSigned serves HTTPS with an in-memory self-signed certificate when
-	// no cert/key files are provided (handy for labs and worker agents).
-	TLSSelfSigned bool `toml:"tls_self_signed"`
 }
 
-// TLSEnabled reports whether the server should serve HTTPS.
-func (s ServerConfig) TLSEnabled() bool {
-	return s.TLSSelfSigned || (s.TLSCert != "" && s.TLSKey != "")
+// UseSelfSignedTLS reports whether the server should fall back to an in-memory
+// self-signed certificate (TLS on, but no cert/key files supplied).
+func (s ServerConfig) UseSelfSignedTLS() bool {
+	return s.TLSEnabled && (s.TLSCert == "" || s.TLSKey == "")
 }
 
 // PathsConfig holds filesystem locations.
@@ -258,8 +260,8 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("VPHONE_WEB_TLS_KEY"); v != "" {
 		c.Server.TLSKey = v
 	}
-	if v := os.Getenv("VPHONE_WEB_TLS_SELF_SIGNED"); v == "1" || v == "true" {
-		c.Server.TLSSelfSigned = true
+	if v := os.Getenv("VPHONE_WEB_TLS_ENABLED"); v == "1" || v == "true" {
+		c.Server.TLSEnabled = true
 	}
 	if v := os.Getenv("VPHONE_WEB_VPHONE_CLI"); v != "" {
 		c.Paths.VphoneCLI = v

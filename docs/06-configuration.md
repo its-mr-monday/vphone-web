@@ -18,11 +18,18 @@ every section, field, default, and env override.
 | `port` | `8080` | `VPHONE_WEB_PORT` | Listen port |
 | `dev_proxy` | `""` | `VPHONE_WEB_DEV_PROXY` | Reverse-proxy non-API routes to a Vite dev server (set by `make dev`); empty in prod |
 | `headless_vms` | `false` | `VPHONE_WEB_HEADLESS` (`1`/`true`) | Boot VMs with no host window |
-| `tls_cert` | `""` | `VPHONE_WEB_TLS_CERT` | PEM certificate path → serve HTTPS |
+| `tls_enabled` | `false` | `VPHONE_WEB_TLS_ENABLED` (`1`/`true`) | Master switch for HTTPS (web console + `--agent` control link) |
+| `tls_cert` | `""` | `VPHONE_WEB_TLS_CERT` | PEM certificate path (used when `tls_enabled` and both cert+key set) |
 | `tls_key` | `""` | `VPHONE_WEB_TLS_KEY` | PEM private-key path |
-| `tls_self_signed` | `false` | `VPHONE_WEB_TLS_SELF_SIGNED` (`1`/`true`) | Serve HTTPS with an in-memory self-signed cert when no cert/key given |
 
-HTTPS is on when either a cert+key pair is set *or* `tls_self_signed = true`.
+HTTPS is controlled by `tls_enabled`:
+
+- `tls_enabled = true` **with** `tls_cert` + `tls_key` → serve HTTPS with those
+  (real/signed) certificates. Use this in production.
+- `tls_enabled = true` **without** cert/key → serve HTTPS with an in-memory
+  self-signed certificate (labs / worker agents).
+- `tls_enabled = false` → plain HTTP.
+
 The same setting secures the `--agent` control link. See
 [Clustering](07-clustering.md) for how controllers trust a self-signed agent
 (fingerprint pinning).
@@ -131,7 +138,7 @@ See [Clustering](07-clustering.md).
 host = "0.0.0.0"
 port = 8080
 headless_vms = true
-tls_self_signed = true      # HTTPS with a self-signed cert
+tls_enabled = true          # HTTPS; no cert/key below → self-signed
 
 [limits]
 max_concurrent_vms = 8

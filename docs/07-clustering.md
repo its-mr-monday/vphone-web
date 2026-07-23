@@ -97,7 +97,7 @@ POST /api/v1/nodes  { "name": "mini-01", "address": "192.168.10.20:8080",
 
 ## HTTPS workers and certificate trust (TOFU)
 
-If a worker serves HTTPS (`tls_self_signed = true`, or a real cert — see
+If a worker serves HTTPS (`tls_enabled = true`, with or without a real cert — see
 [Configuration](06-configuration.md)), enable the **HTTPS (TLS)** toggle when
 adding it. The controller then reaches the worker over `https://` and pins its
 certificate using **trust-on-first-use**:

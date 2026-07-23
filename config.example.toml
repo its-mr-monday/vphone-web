@@ -9,12 +9,14 @@ host = "0.0.0.0"
 port = 8080
 # dev_proxy = "http://localhost:5173"   # set by `make dev`; leave empty in prod
 headless_vms = false                    # boot VMs with no host window (web/VNC only)
-# HTTPS. Provide a cert + key to serve TLS (also secures the --agent control
-# link). With no files, tls_self_signed = true generates an in-memory cert —
-# controllers accept it once via trust-on-first-use (fingerprint pinning).
+# HTTPS. tls_enabled turns on TLS for the web console and the --agent control
+# link. With tls_cert + tls_key set, those (real/signed) PEM files are used —
+# use this for production or any environment with a proper cert. With tls_enabled
+# on but no files, the server generates an in-memory self-signed cert (labs /
+# worker agents) — controllers accept it once via trust-on-first-use pinning.
+tls_enabled = false
 # tls_cert = "~/.vphone-web/tls/cert.pem"
 # tls_key  = "~/.vphone-web/tls/key.pem"
-tls_self_signed = false
 
 [paths]
 vphone_cli = "./vphone-cli"             # path to the vphone-cli submodule

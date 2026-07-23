@@ -162,11 +162,11 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 
 	// TLS: serve HTTPS when a cert/key is configured, or generate a self-signed
 	// certificate on demand. The same setting secures the --agent control link.
-	tlsEnabled := cfg.Server.TLSEnabled()
+	tlsEnabled := cfg.Server.TLSEnabled
 	scheme := "http"
 	if tlsEnabled {
 		scheme = "https"
-		if cfg.Server.TLSCert == "" || cfg.Server.TLSKey == "" {
+		if cfg.Server.UseSelfSignedTLS() {
 			cert, gerr := selfSignedCert(cfg.Server.Host)
 			if gerr != nil {
 				return fmt.Errorf("generate self-signed cert: %w", gerr)
@@ -280,9 +280,9 @@ func printAgentBanner(cfg config.Config, logger *slog.Logger) {
 		fmt.Fprintf(os.Stderr, "  │   Address:         %s:%d\n", a, port)
 	}
 	fmt.Fprintln(os.Stderr, "  │   System password: (your VPHONE_SYSTEM_PASSWORD)")
-	if cfg.Server.TLSEnabled() {
-		fmt.Fprintln(os.Stderr, "  │   TLS (HTTPS):     enable the toggle — this agent serves HTTPS.")
-		if cfg.Server.TLSCert == "" {
+	if cfg.Server.TLSEnabled {
+		fmt.Fprintln(os.Stderr, "  │   TLS (HTTPS):     enabled — this agent serves HTTPS.")
+		if cfg.Server.UseSelfSignedTLS() {
 			fmt.Fprintln(os.Stderr, "  │                    (self-signed — accept the certificate fingerprint once)")
 		}
 	}
