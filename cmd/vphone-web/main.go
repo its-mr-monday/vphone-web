@@ -240,11 +240,33 @@ func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Ser
 	for group, role := range cfg.Auth.RoleMap {
 		roleMap[group] = auth.Role(role)
 	}
+
+	// External providers (added when enabled). LDAP is a password-grant
+	// Authenticator; OIDC/SAML register HTTP redirect handlers on the router.
+	var providers []auth.Authenticator
+	if cfg.Auth.LDAP.Enabled {
+		ldapProv, err := auth.NewLDAP(auth.LDAPOptions{
+			URL:          cfg.Auth.LDAP.URL,
+			BindDN:       cfg.Auth.LDAP.BindDN,
+			BindPassword: cfg.Auth.LDAP.BindPassword,
+			BaseDN:       cfg.Auth.LDAP.BaseDN,
+			UserFilter:   cfg.Auth.LDAP.UserFilter,
+			GroupFilter:  cfg.Auth.LDAP.GroupFilter,
+			Insecure:     cfg.Auth.LDAP.Insecure,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("ldap provider: %w", err)
+		}
+		providers = append(providers, ldapProv)
+		logger.Info("LDAP auth provider enabled", "url", cfg.Auth.LDAP.URL)
+	}
+
 	svc := auth.NewService(sqlDB, auth.Options{
 		Enabled:     cfg.Auth.Enabled,
 		SessionTTL:  ttl,
 		RoleMap:     roleMap,
 		DefaultRole: auth.Role(cfg.Auth.DefaultRole),
+		Providers:   providers,
 		Logger:      logger,
 	})
 	if err := svc.BootstrapAdmin(cfg.Auth.BootstrapAdmin, cfg.Auth.BootstrapPassword); err != nil {

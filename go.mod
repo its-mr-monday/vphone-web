@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.54.0
@@ -13,7 +14,9 @@ require (
 )
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

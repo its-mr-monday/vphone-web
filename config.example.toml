@@ -38,15 +38,39 @@ bootstrap_admin    = "admin"            # created on first start when enabled + 
 bootstrap_password = ""                 # set once; the account must change it on login
 default_role       = "vphone-user"      # role for external users with no group match
 
-# Map external directory groups to roles (LDAP/OIDC/SAML — added incrementally):
+# Map external directory groups (LDAP memberOf CN / OIDC or SAML group claim) to
+# roles. Users whose groups match nothing get default_role.
 # [auth.role_map]
 # "vphone-admins" = "vphone-admin"
 # "vphone-users"  = "vphone-user"
 
+# LDAP / Active Directory (search-then-bind). Users log in with the normal
+# username+password form; matched group CNs feed [auth.role_map].
 # [auth.ldap]
-# enabled = true
-# url = "ldaps://ldap.example.com" ; base_dn = "dc=example,dc=com"
-# bind_dn = "..." ; bind_password = "..." ; user_filter = "(uid=%s)"
+# enabled       = true
+# url           = "ldaps://ldap.example.com:636"  # ldap:// or ldaps://
+# bind_dn       = "cn=svc,dc=example,dc=com"       # service account ("" = anonymous)
+# bind_password = "..."
+# base_dn       = "dc=example,dc=com"
+# user_filter   = "(sAMAccountName=%s)"            # AD; or "(uid=%s)" for OpenLDAP
+# group_filter  = "(member=%s)"                    # optional; %s = the user's DN
+# insecure      = false                            # true skips TLS verification (labs)
+
+# OIDC / OAuth2 (browser SSO — Okta, Entra ID, Google, Keycloak, …).
+# [auth.oidc]
+# enabled       = true
+# issuer        = "https://accounts.example.com"   # discovery base URL
+# client_id     = "vphone-web"
+# client_secret = "..."
+# redirect_url  = "https://vphone.example.com/api/v1/auth/oidc/callback"
+# groups_claim  = "groups"                          # ID-token claim holding group names
+
+# SAML 2.0 (browser SSO via IdP metadata).
+# [auth.saml]
+# enabled          = true
+# idp_metadata_url = "https://idp.example.com/metadata"
+# entity_id        = "https://vphone.example.com/saml/metadata"
+# acs_url          = "https://vphone.example.com/api/v1/auth/saml/acs"
 
 # Clustering — a controller manages worker nodes (each a `vphone-web --agent`).
 # The system password is the shared secret on the controller↔worker control link.

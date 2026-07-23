@@ -58,6 +58,7 @@ type LDAPConfig struct {
 	BaseDN       string `toml:"base_dn"`
 	UserFilter   string `toml:"user_filter"`  // e.g. (uid=%s)
 	GroupFilter  string `toml:"group_filter"` // e.g. (member=%s)
+	Insecure     bool   `toml:"insecure"`     // skip TLS verification (labs/self-signed)
 }
 
 // OIDCConfig configures the OIDC/OAuth2 provider.
