@@ -20,6 +20,13 @@ func UserFrom(ctx context.Context) (*User, bool) {
 	return u, ok
 }
 
+// ContextWithUser attaches a user to a context. Used by the trusted-controller
+// path (a valid cluster system password acts as an admin) so proxied requests
+// satisfy the normal role gates.
+func ContextWithUser(ctx context.Context, u *User) context.Context {
+	return context.WithValue(ctx, userKey, u)
+}
+
 // Middleware resolves the session cookie (if present) and attaches the user to
 // the request context. It never rejects — use RequireAuth/RequireRole to gate.
 // When auth is disabled it is a pass-through.

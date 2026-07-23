@@ -23,10 +23,14 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 	r.Use(recoverer(s.log))
 	// Resolve the session (if any) into the request context; never rejects.
 	r.Use(s.auth.Middleware)
+	// A valid cluster system password acts as an admin (controller proxying).
+	r.Use(s.controllerTrust)
 
 	// Convenience wrappers so role gating is a no-op when auth is disabled.
 	admin := s.auth.RequireRole(auth.RoleAdmin)
 	user := s.auth.RequireAuth
+	// remote adds transparent proxying to the owning node for per-VM routes.
+	remote := s.routeRemoteVM
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth endpoints (open — the login flow itself).
@@ -74,30 +78,32 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.With(admin).Post("/", s.createVM)
 			r.With(admin).Post("/import", s.importVM)
 			r.With(admin).Post("/import-bundle", s.importBundle)
+			// Per-VM routes: each gate runs, then `remote` proxies to the owning
+			// node when the id is remote (else the local handler runs).
 			r.Route("/{id}", func(r chi.Router) {
-				r.With(user).Get("/", s.getVM)
-				r.With(admin).Patch("/", s.updateVM)
-				r.With(admin).Get("/export", s.exportVM)
-				r.With(admin).Delete("/", s.deleteVM)
-				r.With(user).Post("/boot", s.bootVM)
-				r.With(user).Post("/stop", s.stopVM)
-				r.With(user).Post("/restart", s.restartVM)
-				r.With(user).Get("/vnc", s.vncWS)
-				r.With(user).Get("/terminal", s.terminalWS)
-				r.With(user).Get("/info", s.guestInfo)
-				r.With(user).Get("/frida", s.fridaStatus)
-				r.With(user).Get("/frida/processes", s.fridaProcesses)
-				r.With(admin).Post("/frida/install", s.fridaInstall)
-				r.With(user).Post("/frida/start", s.fridaStart)
-				r.With(user).Post("/frida/stop", s.fridaStop)
-				r.With(admin).Post("/frida/port", s.fridaSetPort)
-				r.With(user).Post("/screenshot", s.screenshot)
-				r.With(user).Post("/touch", s.touch)
-				r.With(user).Post("/key", s.key)
-				r.With(user).Get("/snapshots", s.listSnapshots)
-				r.With(user).Post("/snapshots", s.createSnapshot)
-				r.With(user).Post("/snapshots/{name}/restore", s.restoreSnapshot)
-				r.With(admin).Delete("/snapshots/{name}", s.deleteSnapshot)
+				r.With(user, remote).Get("/", s.getVM)
+				r.With(admin, remote).Patch("/", s.updateVM)
+				r.With(admin, remote).Get("/export", s.exportVM)
+				r.With(admin, remote).Delete("/", s.deleteVM)
+				r.With(user, remote).Post("/boot", s.bootVM)
+				r.With(user, remote).Post("/stop", s.stopVM)
+				r.With(user, remote).Post("/restart", s.restartVM)
+				r.With(user, remote).Get("/vnc", s.vncWS)
+				r.With(user, remote).Get("/terminal", s.terminalWS)
+				r.With(user, remote).Get("/info", s.guestInfo)
+				r.With(user, remote).Get("/frida", s.fridaStatus)
+				r.With(user, remote).Get("/frida/processes", s.fridaProcesses)
+				r.With(admin, remote).Post("/frida/install", s.fridaInstall)
+				r.With(user, remote).Post("/frida/start", s.fridaStart)
+				r.With(user, remote).Post("/frida/stop", s.fridaStop)
+				r.With(admin, remote).Post("/frida/port", s.fridaSetPort)
+				r.With(user, remote).Post("/screenshot", s.screenshot)
+				r.With(user, remote).Post("/touch", s.touch)
+				r.With(user, remote).Post("/key", s.key)
+				r.With(user, remote).Get("/snapshots", s.listSnapshots)
+				r.With(user, remote).Post("/snapshots", s.createSnapshot)
+				r.With(user, remote).Post("/snapshots/{name}/restore", s.restoreSnapshot)
+				r.With(admin, remote).Delete("/snapshots/{name}", s.deleteSnapshot)
 			})
 		})
 

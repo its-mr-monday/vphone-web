@@ -1,15 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
 
 	"github.com/cyberm-tech/vphone-web/internal/vm"
 	"github.com/go-chi/chi/v5"
 )
 
-// listVMs handles GET /api/v1/vms.
+// listVMs handles GET /api/v1/vms. On a controller it returns a unified list:
+// the local VMs (node_id "") plus every online worker node's VMs (annotated
+// with their node), so one UI shows the whole cluster.
 func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 	vms, err := s.vms.List()
 	if err != nil {
@@ -17,7 +22,34 @@ func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list VMs")
 		return
 	}
-	writeJSON(w, http.StatusOK, vms)
+	local := selfNodeName()
+	out := make([]map[string]any, 0, len(vms))
+	for _, v := range vms {
+		m := structToMap(v)
+		m["node_id"] = ""
+		m["node_name"] = local
+		out = append(out, m)
+	}
+	if s.cluster != nil {
+		out = append(out, s.cluster.RemoteVMs()...)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// selfNodeName is a friendly label for this (local) host in the unified list.
+func selfNodeName() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "this host"
+}
+
+// structToMap round-trips a value through JSON into a map for annotation.
+func structToMap(v any) map[string]any {
+	b, _ := json.Marshal(v)
+	m := map[string]any{}
+	_ = json.Unmarshal(b, &m)
+	return m
 }
 
 // createVMRequest is the POST /api/v1/vms body.
@@ -31,15 +63,40 @@ type createVMRequest struct {
 	CPU              int    `json:"cpu"`
 	Memory           int    `json:"memory"`
 	DiskSize         int    `json:"disk_size"`
+	// NodeID targets a worker node for the build; "" / "local" builds here.
+	NodeID string `json:"node_id"`
 }
 
 // createVM handles POST /api/v1/vms. It kicks off the provisioning pipeline and
-// returns the VM in CREATING (202 Accepted); progress is tracked via the VM's
-// status and its jobs.
+// returns the VM in CREATING (202 Accepted). When node_id targets a worker, the
+// build is deployed to that node (the controller proxies the create).
 func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 	var req createVMRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	// Deploy to a specific worker node.
+	if req.NodeID != "" && req.NodeID != "local" && s.cluster != nil {
+		node, nerr := s.cluster.Get(req.NodeID)
+		if nerr != nil {
+			writeError(w, http.StatusNotFound, "target node not found")
+			return
+		}
+		// Strip node_id so the worker builds locally, then proxy the create.
+		m := map[string]any{}
+		_ = json.Unmarshal(body, &m)
+		delete(m, "node_id")
+		stripped, _ := json.Marshal(m)
+		r.Body = io.NopCloser(bytes.NewReader(stripped))
+		r.ContentLength = int64(len(stripped))
+		s.proxyToNode(node, w, r)
 		return
 	}
 

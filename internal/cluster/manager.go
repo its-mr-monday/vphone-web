@@ -52,6 +52,11 @@ type Manager struct {
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+
+	// vmCache holds each online node's VMs (decoded), refreshed on health sweeps,
+	// for the aggregated list and per-VM routing.
+	vmMu    sync.Mutex
+	vmCache map[string][]map[string]any
 }
 
 // NewManager constructs the cluster manager.
@@ -188,6 +193,7 @@ func (m *Manager) checkNode(ctx context.Context, n Node) {
 		n.Status = StatusOffline
 		n.Error = err.Error()
 		_ = m.store.updateHealth(n)
+		m.setVMCache(n.ID, nil) // stop advertising a dead node's VMs
 		return
 	}
 	n.Status = StatusOnline
@@ -196,6 +202,8 @@ func (m *Manager) checkNode(ctx context.Context, n Node) {
 	n.MemoryMB, n.RunningVMs, n.Version = health.MemoryMB, health.RunningVMs, health.Version
 	n.LastSeen = time.Now()
 	_ = m.store.updateHealth(n)
+	// Refresh this node's VM list for the aggregated view + routing.
+	m.fetchVMs(ctx, n)
 }
 
 // probe calls an agent's health endpoint with the system password. For HTTPS
