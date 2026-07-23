@@ -17,19 +17,18 @@ over the (TLS-pinned) control link:
   **SSH terminal** (WebSockets tunnel through the controller), inject touch/keys,
   screenshot, boot/stop/restart, edit its config, manage snapshots, and drive
   Frida — all against a VM on another host.
-- **Deploy to a node** — the create wizard's **Deploy to** selector builds a new
-  VM on the chosen worker (the firmware must already be in that node's IPSW
-  library).
+- **Deploy to a node** — the create wizard's **Deploy to** selector (on the
+  firmware step) lists the *chosen node's* IPSW library and builds the VM there.
+  The firmware must exist in that node's library (upload/register it on the node
+  first); bare-shell VMs deploy anywhere.
+- **Live job logs from any node** — a remote Frida install or provisioning
+  pipeline streams its log back through the controller (the Jobs tab and job-log
+  WebSocket route to the owning node automatically).
+- **Cluster-wide dashboard** — the Total VMs / Running tiles count the whole
+  cluster.
 
 Health monitoring continues underneath: each worker's capacity and status (chip,
 CPU, memory, running VM count, version) is polled on the heartbeat interval.
-
-> **Current limitations:** the create wizard lists the *controller's* IPSW
-> library, so deploying a provisioned VM to a worker requires that firmware to
-> already exist on the worker (bare-shell VMs deploy anywhere). Remote
-> **job logs** (e.g. a remote Frida install or provisioning pipeline) don't yet
-> stream back through the controller — watch them on the worker directly. These
-> are the remaining gaps toward full parity.
 
 ## The shared secret
 
