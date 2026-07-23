@@ -1,8 +1,9 @@
-import { Play, Square, RotateCw, Trash2 } from "lucide-react";
+import { Play, Square, RotateCw, Trash2, Download } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, type VM } from "../../api/client";
 import { useBootVM, useStopVM } from "../../hooks/useVM";
 import { api } from "../../api/client";
+import { useAuth } from "../../hooks/useAuth";
 import { Button } from "../ui/Button";
 import { useState } from "react";
 import { DeleteVMDialog } from "./DeleteVMDialog";
@@ -11,6 +12,7 @@ import { DeleteVMDialog } from "./DeleteVMDialog";
 export function VMControls({ vm }: { vm: VM }) {
   const boot = useBootVM();
   const stop = useStopVM();
+  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
@@ -74,6 +76,14 @@ export function VMControls({ vm }: { vm: VM }) {
       >
         Restart
       </Button>
+
+      {isAdmin && vm.status === "STOPPED" && (
+        <a href={api.exportVMURL(vm.id)} download>
+          <Button variant="ghost" icon={<Download className="h-3.5 w-3.5" />} disabled={busy}>
+            Export
+          </Button>
+        </a>
+      )}
 
       <Button
         variant="ghost"

@@ -190,6 +190,7 @@ export const api = {
   importVM: (body: { name: string; vm_dir: string; variant: Variant; ios_version?: string }) =>
     request<VM>("/vms/import", { method: "POST", body: JSON.stringify(body) }),
   deleteVM: (id: string) => request<{ job_id?: string }>(`/vms/${id}`, { method: "DELETE" }),
+  exportVMURL: (id: string) => `/api/v1/vms/${id}/export`,
   bootVM: (id: string) => request<VM>(`/vms/${id}/boot`, { method: "POST" }),
   stopVM: (id: string) => request<VM>(`/vms/${id}/stop`, { method: "POST" }),
   restartVM: (id: string) => request<VM>(`/vms/${id}/restart`, { method: "POST" }),

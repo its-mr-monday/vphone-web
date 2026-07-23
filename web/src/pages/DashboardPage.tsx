@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Server, Activity, HardDrive, ListChecks, Download } from "lucide-react";
+import { Plus, Server, Activity, HardDrive, ListChecks, Download, PackageOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useVMs } from "../hooks/useVM";
 import { useAuth } from "../hooks/useAuth";
@@ -8,6 +8,7 @@ import { useJobs } from "../hooks/useJobs";
 import { VMCard } from "../components/vm/VMCard";
 import { Button } from "../components/ui/Button";
 import { ImportVMDialog } from "../components/vm/ImportVMDialog";
+import { ImportBundleDialog } from "../components/vm/ImportBundleDialog";
 import { JobBadge, jobDuration } from "../components/jobs/JobBadge";
 import { formatBytes } from "../api/client";
 
@@ -18,6 +19,7 @@ export function DashboardPage() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const [importing, setImporting] = useState(false);
+  const [importingBundle, setImportingBundle] = useState(false);
 
   const activeJobs = jobs?.filter((j) => j.status === "RUNNING" || j.status === "PENDING") ?? [];
   const vmDiskPct = sys?.vm_disk.total_bytes
@@ -36,8 +38,11 @@ export function DashboardPage() {
         </div>
         {isAdmin && (
           <div className="flex items-center gap-2">
+            <Button variant="ghost" icon={<PackageOpen className="h-3.5 w-3.5" />} onClick={() => setImportingBundle(true)}>
+              Import Bundle
+            </Button>
             <Button variant="ghost" icon={<Download className="h-3.5 w-3.5" />} onClick={() => setImporting(true)}>
-              Import
+              Import Dir
             </Button>
             <Button variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => navigate("/create")}>
               New Device
@@ -51,6 +56,15 @@ export function DashboardPage() {
           onClose={() => setImporting(false)}
           onImported={(vm) => {
             setImporting(false);
+            navigate(`/vms/${vm.id}`);
+          }}
+        />
+      )}
+      {importingBundle && (
+        <ImportBundleDialog
+          onClose={() => setImportingBundle(false)}
+          onImported={(vm) => {
+            setImportingBundle(false);
             navigate(`/vms/${vm.id}`);
           }}
         />
