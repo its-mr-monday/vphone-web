@@ -15,6 +15,21 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
 > mouse+keyboard input, an interactive SSH terminal, touch, and hardware keys.
 > The console renders the device inside a Corellium-style iPhone shell.
 
+## Screenshots
+
+Live iOS SpringBoard over noVNC, rendered inside the iPhone device frame:
+
+![iOS display](images/ios_view.png)
+
+Interactive SSH terminal (xterm.js over a real server-side SSH client):
+
+![SSH terminal](images/terminal_view.png)
+
+Debug tab — `frida-server` management, remote-access commands, and live app
+enumeration via `frida-ps`:
+
+![Frida debug tab](images/frida_debug_view.png)
+
 ## What it does
 
 - **IPSW library** — register a firmware file already on disk (no copy), upload
