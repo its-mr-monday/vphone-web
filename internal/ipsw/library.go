@@ -33,12 +33,27 @@ const (
 	StatusError       Status = "ERROR"
 )
 
+// Kind distinguishes the two firmware sources a VM build needs.
+const (
+	KindIPhone  = "iphone"  // iOS device firmware → IPHONE_SOURCE
+	KindCloudOS = "cloudos" // PCC research stack   → CLOUDOS_SOURCE
+)
+
+// normalizeKind returns a valid kind, defaulting to iphone.
+func normalizeKind(k string) string {
+	if k == KindCloudOS {
+		return KindCloudOS
+	}
+	return KindIPhone
+}
+
 // IPSW is a library entry.
 type IPSW struct {
 	ID        string    `json:"id"`
 	Version   string    `json:"version"`
 	Build     string    `json:"build"`
 	Device    string    `json:"device"`
+	Kind      string    `json:"kind"` // iphone | cloudos
 	SourceURL string    `json:"source_url,omitempty"`
 	FilePath  string    `json:"file_path"`
 	Status    Status    `json:"status"`
@@ -121,6 +136,7 @@ type RegisterParams struct {
 	Version  string
 	Build    string
 	Device   string
+	Kind     string // iphone (default) | cloudos
 }
 
 // Register adds an IPSW that already exists on disk without copying it.
@@ -143,6 +159,7 @@ func (l *Library) Register(p RegisterParams) (IPSW, error) {
 		Version:   strings.TrimSpace(p.Version),
 		Build:     strings.TrimSpace(p.Build),
 		Device:    strings.TrimSpace(p.Device),
+		Kind:      normalizeKind(p.Kind),
 		FilePath:  path,
 		Status:    StatusReady,
 		Size:      info.Size(),
@@ -163,7 +180,7 @@ func (l *Library) Register(p RegisterParams) (IPSW, error) {
 
 // SaveUpload streams an uploaded IPSW into the managed directory and registers
 // it. filename is the client-provided base name.
-func (l *Library) SaveUpload(filename string, r io.Reader) (IPSW, error) {
+func (l *Library) SaveUpload(filename, kind string, r io.Reader) (IPSW, error) {
 	base := filepath.Base(filename)
 	if base == "." || base == "/" || base == "" {
 		base = "upload-" + uuid.NewString() + ".ipsw"
@@ -186,6 +203,7 @@ func (l *Library) SaveUpload(filename string, r io.Reader) (IPSW, error) {
 	now := time.Now()
 	it := IPSW{
 		ID:        uuid.NewString(),
+		Kind:      normalizeKind(kind),
 		FilePath:  dest,
 		Status:    StatusReady,
 		Size:      size,
@@ -204,7 +222,7 @@ func (l *Library) SaveUpload(filename string, r io.Reader) (IPSW, error) {
 
 // Download registers a placeholder entry and enqueues a background download job
 // (aria2c preferred, curl fallback). Returns the entry and the job handle.
-func (l *Library) Download(url string) (IPSW, *jobs.Handle, error) {
+func (l *Library) Download(url, kind string) (IPSW, *jobs.Handle, error) {
 	url = strings.TrimSpace(url)
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return IPSW{}, nil, fmt.Errorf("invalid URL %q", url)
@@ -218,6 +236,7 @@ func (l *Library) Download(url string) (IPSW, *jobs.Handle, error) {
 	now := time.Now()
 	it := IPSW{
 		ID:        uuid.NewString(),
+		Kind:      normalizeKind(kind),
 		SourceURL: url,
 		FilePath:  dest,
 		Status:    StatusDownloading,

@@ -19,6 +19,7 @@ export function CreateVMPage() {
 
   const [step, setStep] = useState(0);
   const [ipswId, setIpswId] = useState<string>("");
+  const [cloudosId, setCloudosId] = useState<string>("");
   const [variant, setVariant] = useState<Variant>("regular");
   const [name, setName] = useState("");
   const [cpu, setCpu] = useState(4);
@@ -38,7 +39,10 @@ export function CreateVMPage() {
   });
 
   const ready = (ipsws ?? []).filter((i) => i.status === "READY" || i.status === "REGISTERED");
+  const iphoneIpsws = ready.filter((i) => i.kind !== "cloudos");
+  const cloudosIpsws = ready.filter((i) => i.kind === "cloudos");
   const selectedIpsw = ready.find((i) => i.id === ipswId);
+  const selectedCloudos = cloudosIpsws.find((i) => i.id === cloudosId);
 
   const steps = ["Firmware", "Variant", "Resources", "Confirm"];
 
@@ -50,6 +54,7 @@ export function CreateVMPage() {
         variant,
         ios_version: selectedIpsw?.version ?? "",
         ipsw_id: ipswId || undefined,
+        cloudos_ipsw_id: cloudosId || undefined,
         network_mode: network,
         network_interface: network === "bridged" ? iface || undefined : undefined,
         cpu,
@@ -118,6 +123,7 @@ export function CreateVMPage() {
                     onChange={(e) => {
                       setNodeId(e.target.value);
                       setIpswId(""); // firmware library differs per node
+                      setCloudosId("");
                     }}
                     className="wiz-input"
                   >
@@ -131,6 +137,10 @@ export function CreateVMPage() {
                   </p>
                 </div>
               )}
+
+              <div className="mb-1.5 font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                iPhone firmware (IPHONE_SOURCE)
+              </div>
               <button
                 onClick={() => setIpswId("")}
                 className={`mb-2 w-full rounded-md border px-4 py-3 text-left transition-colors ${
@@ -142,12 +152,12 @@ export function CreateVMPage() {
                   create the VM directory only — provision firmware later
                 </div>
               </button>
-              {ready.length === 0 ? (
+              {iphoneIpsws.length === 0 ? (
                 <p className="rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 font-mono text-[11px] text-warn">
-                  No IPSWs in {nodeId ? "this node's" : "the"} library. Add one on the IPSW page to run the full pipeline.
+                  No iPhone IPSWs in {nodeId ? "this node's" : "the"} library. Add one on the IPSW page to run the full pipeline.
                 </p>
               ) : (
-                ready.map((it) => (
+                iphoneIpsws.map((it) => (
                   <button
                     key={it.id}
                     onClick={() => setIpswId(it.id)}
@@ -166,6 +176,49 @@ export function CreateVMPage() {
                     </div>
                   </button>
                 ))
+              )}
+
+              {/* CloudOS (PCC) source — only relevant when provisioning firmware. */}
+              {ipswId && (
+                <div className="mt-5">
+                  <div className="mb-1.5 font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                    CloudOS firmware (CLOUDOS_SOURCE)
+                  </div>
+                  <button
+                    onClick={() => setCloudosId("")}
+                    className={`mb-2 w-full rounded-md border px-4 py-3 text-left transition-colors ${
+                      cloudosId === "" ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
+                    }`}
+                  >
+                    <div className="font-mono text-xs text-fg">Default (fw_prepare built-in)</div>
+                    <div className="font-mono text-[10px] text-fg-dim">
+                      uses the CLI's default PCC stack — fine for iOS ≤ 26.1
+                    </div>
+                  </button>
+                  {cloudosIpsws.map((it) => (
+                    <button
+                      key={it.id}
+                      onClick={() => setCloudosId(it.id)}
+                      className={`mb-2 flex w-full items-center gap-3 rounded-md border px-4 py-3 text-left transition-colors ${
+                        cloudosId === it.id ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
+                      }`}
+                    >
+                      <HardDriveDownload className="h-4 w-4 text-fg-dim" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-xs text-fg">
+                          {it.version || "CloudOS"} {it.build && `(${it.build})`}
+                        </div>
+                        <div className="truncate font-mono text-[10px] text-fg-dim">
+                          PCC stack · {formatBytes(it.size)}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                  <p className="mt-1 font-mono text-[10px] text-fg-dim">
+                    Newer iOS needs a matching PCC stack — e.g. iOS 27 pairs iPhone 27.0 with CloudOS 26.4.
+                    Add a CloudOS IPSW (kind “cloudos”) on the IPSW page.
+                  </p>
+                </div>
               )}
             </Section>
           )}
@@ -267,6 +320,9 @@ export function CreateVMPage() {
                 <Row k="Name" v={name || "—"} />
                 <Row k="Deploy to" v={nodeId ? (onlineNodes.find((n) => n.id === nodeId)?.name ?? nodeId) : "This host"} />
                 <Row k="Firmware" v={selectedIpsw ? `${selectedIpsw.version} (${selectedIpsw.build})` : "none (bare)"} />
+                {selectedIpsw && (
+                  <Row k="CloudOS" v={selectedCloudos ? `${selectedCloudos.version} (${selectedCloudos.build})` : "default (built-in)"} />
+                )}
                 <Row k="Variant" v={VARIANTS.find((v) => v.value === variant)!.label} />
                 <Row k="Network" v={network === "bridged" ? "Bridged (LAN)" : "NAT (shared)"} />
                 <Row k="CPU" v={`${cpu} cores`} />

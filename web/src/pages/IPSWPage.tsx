@@ -1,8 +1,28 @@
 import { useRef, useState } from "react";
 import { HardDriveDownload, Upload, FolderInput, Trash2, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
-import { ApiError, formatBytes, type IPSW, type IPSWStatus } from "../api/client";
+import { ApiError, formatBytes, type IPSW, type IPSWStatus, type IPSWKind } from "../api/client";
 import { useIPSWs, useRegisterIPSW, useDownloadIPSW, useDeleteIPSW } from "../hooks/useIPSW";
 import { Button } from "../components/ui/Button";
+
+/** iPhone / CloudOS kind toggle shared by the add cards. */
+function KindToggle({ kind, onChange }: { kind: IPSWKind; onChange: (k: IPSWKind) => void }) {
+  return (
+    <div className="flex overflow-hidden rounded-sm border border-border font-mono text-[10px] uppercase">
+      {(["iphone", "cloudos"] as IPSWKind[]).map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => onChange(k)}
+          className={`flex-1 px-2 py-1 transition-colors ${
+            kind === k ? "bg-accent/15 text-accent" : "text-fg-dim hover:text-fg"
+          }`}
+        >
+          {k === "iphone" ? "iPhone" : "CloudOS"}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function IPSWPage() {
   const { data: ipsws, isLoading } = useIPSWs();
@@ -54,6 +74,7 @@ export function IPSWPage() {
 function AddFromDiskCard({ onError }: { onError: (e: string | null) => void }) {
   const register = useRegisterIPSW();
   const [path, setPath] = useState("");
+  const [kind, setKind] = useState<IPSWKind>("iphone");
   return (
     <Card title="Add from disk" icon={<FolderInput className="h-4 w-4 text-accent" />}>
       <input
@@ -62,13 +83,14 @@ function AddFromDiskCard({ onError }: { onError: (e: string | null) => void }) {
         placeholder="/path/to/firmware.ipsw"
         className="input"
       />
+      <KindToggle kind={kind} onChange={setKind} />
       <Button
         variant="primary"
         disabled={!path.trim() || register.isPending}
         onClick={async () => {
           onError(null);
           try {
-            await register.mutateAsync({ file_path: path.trim() });
+            await register.mutateAsync({ file_path: path.trim(), kind });
             setPath("");
           } catch (e) {
             onError(e instanceof ApiError ? e.message : "register failed");
@@ -86,6 +108,7 @@ function UploadCard({ onError }: { onError: (e: string | null) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [kind, setKind] = useState<IPSWKind>("iphone");
 
   function upload(file: File) {
     onError(null);
@@ -93,6 +116,7 @@ function UploadCard({ onError }: { onError: (e: string | null) => void }) {
     setProgress(0);
     const form = new FormData();
     form.append("file", file);
+    form.append("kind", kind);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/v1/ipsws/upload");
     xhr.upload.onprogress = (e) => {
@@ -128,9 +152,12 @@ function UploadCard({ onError }: { onError: (e: string | null) => void }) {
           <p className="mt-1 font-mono text-[10px] text-fg-dim">{progress}%</p>
         </div>
       ) : (
-        <Button variant="primary" onClick={() => fileRef.current?.click()}>
-          Choose .ipsw file
-        </Button>
+        <>
+          <KindToggle kind={kind} onChange={setKind} />
+          <Button variant="primary" onClick={() => fileRef.current?.click()}>
+            Choose .ipsw file
+          </Button>
+        </>
       )}
     </Card>
   );
@@ -139,6 +166,7 @@ function UploadCard({ onError }: { onError: (e: string | null) => void }) {
 function DownloadCard({ onError }: { onError: (e: string | null) => void }) {
   const download = useDownloadIPSW();
   const [url, setUrl] = useState("");
+  const [kind, setKind] = useState<IPSWKind>("iphone");
   return (
     <Card title="Download from URL" icon={<HardDriveDownload className="h-4 w-4 text-accent" />}>
       <input
@@ -147,13 +175,14 @@ function DownloadCard({ onError }: { onError: (e: string | null) => void }) {
         placeholder="https://…/firmware.ipsw"
         className="input"
       />
+      <KindToggle kind={kind} onChange={setKind} />
       <Button
         variant="primary"
         disabled={!url.trim() || download.isPending}
         onClick={async () => {
           onError(null);
           try {
-            await download.mutateAsync(url.trim());
+            await download.mutateAsync({ url: url.trim(), kind });
             setUrl("");
           } catch (e) {
             onError(e instanceof ApiError ? e.message : "download failed");
@@ -176,8 +205,19 @@ function IPSWCard({ ipsw }: { ipsw: IPSW }) {
           <div className="truncate font-mono text-sm text-fg">
             {ipsw.version || "unknown"} {ipsw.build && <span className="text-fg-dim">({ipsw.build})</span>}
           </div>
-          <div className="truncate font-mono text-[10px] text-fg-dim">
-            {ipsw.device || "device ?"} · {ipsw.managed ? "managed" : "in place"}
+          <div className="flex items-center gap-2">
+            <span
+              className={`rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
+                ipsw.kind === "cloudos"
+                  ? "border-warn/40 bg-warn/10 text-warn"
+                  : "border-accent/30 bg-accent/5 text-accent"
+              }`}
+            >
+              {ipsw.kind === "cloudos" ? "CloudOS" : "iPhone"}
+            </span>
+            <span className="truncate font-mono text-[10px] text-fg-dim">
+              {ipsw.device || "device ?"} · {ipsw.managed ? "managed" : "in place"}
+            </span>
           </div>
         </div>
         <IPSWStatusPill status={ipsw.status} />

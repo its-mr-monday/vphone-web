@@ -25,7 +25,7 @@ import (
 //
 // The bracketed firmware steps only run when an IPSW was provided; a bare
 // create (no IPSW) stops after vm_new.
-func (m *Manager) provision(v VM, ipswPath string) {
+func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	if m.jobs == nil {
 		m.markError(v.ID, "job queue unavailable; cannot provision")
 		return
@@ -56,11 +56,16 @@ func (m *Manager) provision(v VM, ipswPath string) {
 		return
 	}
 
-	// Step 2 — download/extract/merge firmware from the chosen IPSW.
-	fwEnv := m.makeEnv([]string{
-		"IPHONE_SOURCE=" + ipswPath,
-		"CLOUDOS_SOURCE=" + ipswPath,
-	})
+	// Step 2 — download/extract/merge firmware from the chosen IPSW(s). The
+	// iPhone (iOS device) firmware and the CloudOS (PCC research stack) are
+	// separate sources — for newer iOS they differ (e.g. iOS 27 pairs iPhone 27.0
+	// with CloudOS 26.4). When no CloudOS source is given, fw_prepare falls back
+	// to its built-in default.
+	fwArgs := []string{"IPHONE_SOURCE=" + ipswPath}
+	if cloudosPath != "" {
+		fwArgs = append(fwArgs, "CLOUDOS_SOURCE="+cloudosPath)
+	}
+	fwEnv := m.makeEnv(fwArgs)
 	if err := m.runStep(v, "fw_prepare", "fw_prepare", jobs.RunCommand(jobs.Command{
 		Name: "make", Dir: cliDir, Env: fwEnv, Args: []string{"fw_prepare", vmDirArg},
 	})); err != nil {

@@ -13,14 +13,14 @@ type store struct {
 	db *sql.DB
 }
 
-const cols = `id, version, build, device, source_url, file_path, status,
+const cols = `id, version, build, device, kind, source_url, file_path, status,
 	size, sha256, error, created_at, updated_at`
 
 func scan(s interface{ Scan(...any) error }) (IPSW, error) {
 	var it IPSW
 	var createdAt, updatedAt string
 	if err := s.Scan(
-		&it.ID, &it.Version, &it.Build, &it.Device, &it.SourceURL, &it.FilePath,
+		&it.ID, &it.Version, &it.Build, &it.Device, &it.Kind, &it.SourceURL, &it.FilePath,
 		&it.Status, &it.Size, &it.SHA256, &it.Error, &createdAt, &updatedAt,
 	); err != nil {
 		return IPSW{}, err
@@ -37,8 +37,8 @@ func scan(s interface{ Scan(...any) error }) (IPSW, error) {
 
 func (st *store) insert(it IPSW) error {
 	_, err := st.db.Exec(
-		`INSERT INTO ipsws (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.Version, it.Build, it.Device, it.SourceURL, it.FilePath,
+		`INSERT INTO ipsws (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.Version, it.Build, it.Device, it.Kind, it.SourceURL, it.FilePath,
 		it.Status, it.Size, it.SHA256, it.Error,
 		it.CreatedAt.Format(rfc3339), it.UpdatedAt.Format(rfc3339),
 	)

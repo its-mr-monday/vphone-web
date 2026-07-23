@@ -25,6 +25,7 @@ type registerIPSWRequest struct {
 	Version  string `json:"version"`
 	Build    string `json:"build"`
 	Device   string `json:"device"`
+	Kind     string `json:"kind"` // iphone (default) | cloudos
 }
 
 // registerIPSW handles POST /api/v1/ipsws (register a file already on disk).
@@ -35,7 +36,8 @@ func (s *Server) registerIPSW(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.ipsw.Register(ipsw.RegisterParams{
-		FilePath: req.FilePath, Version: req.Version, Build: req.Build, Device: req.Device,
+		FilePath: req.FilePath, Version: req.Version, Build: req.Build,
+		Device: req.Device, Kind: req.Kind,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -46,7 +48,8 @@ func (s *Server) registerIPSW(w http.ResponseWriter, r *http.Request) {
 
 // downloadIPSWRequest triggers a URL download.
 type downloadIPSWRequest struct {
-	URL string `json:"url"`
+	URL  string `json:"url"`
+	Kind string `json:"kind"` // iphone (default) | cloudos
 }
 
 // downloadIPSW handles POST /api/v1/ipsws/download.
@@ -56,7 +59,7 @@ func (s *Server) downloadIPSW(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	it, handle, err := s.ipsw.Download(req.URL)
+	it, handle, err := s.ipsw.Download(req.URL, req.Kind)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -78,7 +81,7 @@ func (s *Server) uploadIPSW(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	it, err := s.ipsw.SaveUpload(header.Filename, file)
+	it, err := s.ipsw.SaveUpload(header.Filename, r.FormValue("kind"), file)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

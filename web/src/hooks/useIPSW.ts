@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type IPSW } from "../api/client";
+import { api, type IPSW, type IPSWKind } from "../api/client";
 
 const downloading = (items: IPSW[] | undefined) =>
   items?.some((i) => i.status === "DOWNLOADING");
@@ -15,7 +15,7 @@ export function useIPSWs() {
 export function useRegisterIPSW() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { file_path: string; version?: string; build?: string; device?: string }) =>
+    mutationFn: (body: { file_path: string; version?: string; build?: string; device?: string; kind?: IPSWKind }) =>
       api.registerIPSW(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ipsws"] }),
   });
@@ -24,7 +24,7 @@ export function useRegisterIPSW() {
 export function useDownloadIPSW() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (url: string) => api.downloadIPSW(url),
+    mutationFn: ({ url, kind }: { url: string; kind: IPSWKind }) => api.downloadIPSW(url, kind),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ipsws"] }),
   });
 }

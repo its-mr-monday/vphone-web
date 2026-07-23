@@ -81,6 +81,7 @@ export interface CreateVMRequest {
   variant: Variant;
   ios_version?: string;
   ipsw_id?: string;
+  cloudos_ipsw_id?: string;
   network_mode?: NetworkMode;
   network_interface?: string;
   cpu?: number;
@@ -121,11 +122,14 @@ export interface Job {
 
 export type IPSWStatus = "REGISTERED" | "DOWNLOADING" | "READY" | "ERROR";
 
+export type IPSWKind = "iphone" | "cloudos";
+
 export interface IPSW {
   id: string;
   version: string;
   build: string;
   device: string;
+  kind: IPSWKind;
   source_url?: string;
   file_path: string;
   status: IPSWStatus;
@@ -260,12 +264,12 @@ export const api = {
 
   // IPSWs
   listIPSWs: () => request<IPSW[]>("/ipsws"),
-  registerIPSW: (body: { file_path: string; version?: string; build?: string; device?: string }) =>
+  registerIPSW: (body: { file_path: string; version?: string; build?: string; device?: string; kind?: IPSWKind }) =>
     request<IPSW>("/ipsws", { method: "POST", body: JSON.stringify(body) }),
-  downloadIPSW: (url: string) =>
+  downloadIPSW: (url: string, kind: IPSWKind = "iphone") =>
     request<{ ipsw: IPSW; job_id: string }>("/ipsws/download", {
       method: "POST",
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, kind }),
     }),
   deleteIPSW: (id: string) => request<void>(`/ipsws/${id}`, { method: "DELETE" }),
   // A worker node's IPSW library (proxied by the controller).

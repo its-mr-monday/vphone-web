@@ -104,7 +104,8 @@ type CreateParams struct {
 	Name             string
 	Variant          Variant
 	IOSVersion       string
-	IPSWID           string // when set, the full provisioning pipeline runs
+	IPSWID           string // iPhone IPSW — when set, the full pipeline runs
+	CloudOSIPSWID    string // CloudOS (PCC) IPSW — optional; differs from IPSWID for newer iOS
 	NetworkMode      string // nat | bridged | hostOnly | none (default nat)
 	NetworkInterface string // host interface to bridge to (bridged mode; e.g. en0)
 	CPU              int
@@ -147,8 +148,8 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		return VM{}, fmt.Errorf("invalid network mode %q", p.NetworkMode)
 	}
 
-	// Resolve the IPSW path up front so we fail fast on a bad reference.
-	var ipswPath string
+	// Resolve the IPSW paths up front so we fail fast on a bad reference.
+	var ipswPath, cloudosPath string
 	if p.IPSWID != "" {
 		if m.opts.IPSWPath == nil {
 			return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
@@ -157,6 +158,12 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		ipswPath, err = m.opts.IPSWPath(p.IPSWID)
 		if err != nil {
 			return VM{}, fmt.Errorf("resolve IPSW %s: %w", p.IPSWID, err)
+		}
+		if p.CloudOSIPSWID != "" {
+			cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+			if err != nil {
+				return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+			}
 		}
 	}
 
@@ -203,7 +210,7 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		"ipsw", p.IPSWID, "vnc_port", block.VNC)
 
 	// Launch the provisioning pipeline in the background.
-	go m.provision(v, ipswPath)
+	go m.provision(v, ipswPath, cloudosPath)
 
 	return v, nil
 }

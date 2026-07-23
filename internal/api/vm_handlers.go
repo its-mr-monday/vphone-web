@@ -58,6 +58,7 @@ type createVMRequest struct {
 	Variant          string `json:"variant"`
 	IOSVersion       string `json:"ios_version"`
 	IPSWID           string `json:"ipsw_id"`
+	CloudOSIPSWID    string `json:"cloudos_ipsw_id"`
 	NetworkMode      string `json:"network_mode"`
 	NetworkInterface string `json:"network_interface"`
 	CPU              int    `json:"cpu"`
@@ -105,6 +106,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		Variant:          vm.Variant(req.Variant),
 		IOSVersion:       req.IOSVersion,
 		IPSWID:           req.IPSWID,
+		CloudOSIPSWID:    req.CloudOSIPSWID,
 		NetworkMode:      req.NetworkMode,
 		NetworkInterface: req.NetworkInterface,
 		CPU:              req.CPU,
