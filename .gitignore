@@ -1,0 +1,25 @@
+# Go
+/bin/
+/tmp/
+*.test
+*.out
+
+# Build output — the frontend is built into web/dist by `make build`.
+# Ignore everything under dist except the committed placeholder index.html,
+# which keeps the go:embed directive compiling on a fresh clone.
+/web/dist/*
+!/web/dist/index.html
+/web/node_modules/
+
+# Local server state (if data_dir points into the repo)
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# TS build cache
+/web/*.tsbuildinfo

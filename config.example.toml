@@ -1,0 +1,24 @@
+# vphone-web configuration.
+#
+# Copy to ~/.config/vphone-web/config.toml and edit as needed. Every field has
+# a sane default — the server runs with zero configuration. Any value can be
+# overridden via VPHONE_WEB_* environment variables (e.g. VPHONE_WEB_PORT).
+
+[server]
+host = "0.0.0.0"
+port = 8080
+# dev_proxy = "http://localhost:5173"   # set by `make dev`; leave empty in prod
+
+[paths]
+vphone_cli = "./vphone-cli"             # path to the vphone-cli submodule
+vm_root    = "~/.vphone-web/vms"        # where VM directories are created
+ipsw_dir   = "~/.vphone-web/ipsws"      # IPSW storage
+data_dir   = "~/.vphone-web"            # SQLite database + server state
+
+[ports]
+base       = 10000                      # first host port for VM allocations
+block_size = 10                         # host ports reserved per VM
+
+[limits]
+max_concurrent_vms  = 4                 # max simultaneously running VMs
+max_concurrent_jobs = 2                 # max parallel background jobs

@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/* vphone-web design tokens — dark, terminal-forward, cyan-accented.
+   Tailwind v4 CSS-first config: these become utilities like bg-base, text-accent. */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono",
+    Menlo, monospace;
+
+  /* Near-black surfaces (not gray). */
+  --color-base: #0a0a0a;
+  --color-surface: #101012;
+  --color-surface-2: #141417;
+  --color-elevated: #1a1a1e;
+  --color-border: #26262b;
+  --color-border-bright: #34343b;
+
+  /* Text. */
+  --color-fg: #e6e6ea;
+  --color-fg-muted: #8a8a94;
+  --color-fg-dim: #55555e;
+
+  /* Status accents. */
+  --color-accent: #00e5ff; /* cyan — active/running */
+  --color-warn: #ffab00; /* amber — warnings/transitional */
+  --color-error: #ff1744; /* red — errors */
+  --color-success: #00e676; /* green — success */
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-base);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Terminal-flavored scrollbars. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-bright);
+}
+
+/* Subtle scanline glow for the "hero" VNC frame. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
