@@ -1,7 +1,7 @@
 # vphone-web
 
-Self-hosted web management platform for virtualized iPhones — a Corellium-inspired
-console wrapping [vphone-cli](https://github.com/Lakr233/vphone-cli). Built for
+Self-hosted web management platform for virtualized iPhones — a web UI for
+managing VMs using [vphone-cli](https://github.com/Lakr233/vphone-cli). Built for
 red-team engineers and security researchers managing jailbroken iOS VMs for
 vulnerability research, exploit development, and device instrumentation.
 
@@ -13,7 +13,7 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
 > image was provisioned (fw_prepare → fw_patch_jb → restore → cfw_install_jb),
 > booted to **SpringBoard**, and driven live from the browser: noVNC display with
 > mouse+keyboard input, an interactive SSH terminal, touch, and hardware keys.
-> The console renders the device inside a Corellium-style iPhone shell.
+> The console renders the device inside a realistic iPhone shell.
 
 ## Screenshots
 

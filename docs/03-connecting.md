@@ -27,7 +27,7 @@ external tooling.
 ## Display (noVNC)
 
 The **Display** tab streams the guest screen over a WebSocket→TCP VNC proxy,
-rendered inside a Corellium-style iPhone frame. The canvas fills the frame
+rendered inside a realistic iPhone device frame. The canvas fills the frame
 edge-to-edge at the guest's native `1290×2796`.
 
 - **Input:** by default noVNC handles input natively — your **mouse acts as

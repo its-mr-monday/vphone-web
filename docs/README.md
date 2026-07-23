@@ -1,7 +1,7 @@
 # vphone-web Documentation
 
-Self-hosted web console for virtualized iPhones — a Corellium-style front end
-over [vphone-cli](https://github.com/Lakr233/vphone-cli). These docs cover
+Self-hosted web console for virtualized iPhones — a web UI for managing VMs
+using [vphone-cli](https://github.com/Lakr233/vphone-cli). These docs cover
 everything from first run to running a cluster of hosts.
 
 > vphone-web runs on **macOS 15+ on Apple Silicon only** (it needs

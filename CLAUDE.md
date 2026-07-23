@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-**vphone-web** is a self-hosted web management platform for virtualized iPhones, wrapping [vphone-cli](https://github.com/Lakr233/vphone-cli) with a Corellium-inspired UI. It is built by the CyberM Technologies team for internal offensive security research under DND contract work. The target users are red team engineers and security researchers who need to manage multiple jailbroken iOS VMs for vulnerability research, exploit development, and device instrumentation.
+**vphone-web** is a self-hosted web management platform for virtualized iPhones, wrapping [vphone-cli](https://github.com/Lakr233/vphone-cli) with a web UI for managing VMs. It is built by the CyberM Technologies team for internal offensive security research under DND contract work. The target users are red team engineers and security researchers who need to manage multiple jailbroken iOS VMs for vulnerability research, exploit development, and device instrumentation.
 
 vphone-cli is included as a git submodule at `./vphone-cli/`.
 
