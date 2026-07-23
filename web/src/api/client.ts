@@ -291,8 +291,28 @@ export const api = {
 
   // Cluster nodes (admin)
   listNodes: () => request<ClusterNode[]>("/nodes"),
-  registerNode: (body: { name: string; address: string; system_password: string }) =>
-    request<ClusterNode>("/nodes", { method: "POST", body: JSON.stringify(body) }),
+  registerNode: async (body: RegisterNodeRequest): Promise<RegisterNodeResult> => {
+    const res = await fetch("/api/v1/nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409) {
+      const trust = (await res.json()) as CertTrustPrompt;
+      if (trust.needs_trust) return { trust };
+    }
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        const b = (await res.json()) as { error?: string };
+        if (b.error) message = b.error;
+      } catch {
+        /* non-JSON */
+      }
+      throw new ApiError(res.status, message);
+    }
+    return { node: (await res.json()) as ClusterNode };
+  },
   deleteNode: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
 
   // Users (admin)
@@ -337,6 +357,7 @@ export interface ClusterNode {
   id: string;
   name: string;
   address: string;
+  tls: boolean;
   status: NodeStatus;
   hostname?: string;
   chip?: string;
@@ -345,9 +366,34 @@ export interface ClusterNode {
   running_vms: number;
   version?: string;
   error?: string;
+  cert_fingerprint?: string;
   last_seen?: string;
   created_at: string;
 }
+
+/** Request body for registering a worker node. */
+export interface RegisterNodeRequest {
+  name: string;
+  address: string;
+  system_password: string;
+  tls?: boolean;
+  trust_fingerprint?: string;
+}
+
+/** Returned when an HTTPS agent's certificate must be accepted (TOFU). */
+export interface CertTrustPrompt {
+  needs_trust: true;
+  fingerprint: string;
+  subject?: string;
+  issuer?: string;
+  expires?: string;
+  message: string;
+}
+
+/** registerNode returns the node on success, or a trust prompt (HTTP 409). */
+export type RegisterNodeResult =
+  | { node: ClusterNode }
+  | { trust: CertTrustPrompt };
 
 function wsURL(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

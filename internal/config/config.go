@@ -98,6 +98,18 @@ type ServerConfig struct {
 	DevProxy string `toml:"dev_proxy"`
 	// HeadlessVMs boots VMs without a host window (web console / VNC only).
 	HeadlessVMs bool `toml:"headless_vms"`
+	// TLSCert/TLSKey are PEM file paths. When both are set the server (and, in
+	// --agent mode, the control link) is served over HTTPS.
+	TLSCert string `toml:"tls_cert"`
+	TLSKey  string `toml:"tls_key"`
+	// TLSSelfSigned serves HTTPS with an in-memory self-signed certificate when
+	// no cert/key files are provided (handy for labs and worker agents).
+	TLSSelfSigned bool `toml:"tls_self_signed"`
+}
+
+// TLSEnabled reports whether the server should serve HTTPS.
+func (s ServerConfig) TLSEnabled() bool {
+	return s.TLSSelfSigned || (s.TLSCert != "" && s.TLSKey != "")
 }
 
 // PathsConfig holds filesystem locations.
@@ -240,6 +252,15 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("VPHONE_WEB_HEADLESS"); v == "1" || v == "true" {
 		c.Server.HeadlessVMs = true
 	}
+	if v := os.Getenv("VPHONE_WEB_TLS_CERT"); v != "" {
+		c.Server.TLSCert = v
+	}
+	if v := os.Getenv("VPHONE_WEB_TLS_KEY"); v != "" {
+		c.Server.TLSKey = v
+	}
+	if v := os.Getenv("VPHONE_WEB_TLS_SELF_SIGNED"); v == "1" || v == "true" {
+		c.Server.TLSSelfSigned = true
+	}
 	if v := os.Getenv("VPHONE_WEB_VPHONE_CLI"); v != "" {
 		c.Paths.VphoneCLI = v
 	}
@@ -260,7 +281,7 @@ func (c *Config) applyEnvOverrides() {
 
 // expandPaths turns ~-prefixed and relative paths into absolute paths.
 func (c *Config) expandPaths() error {
-	for _, p := range []*string{&c.Paths.VphoneCLI, &c.Paths.VMRoot, &c.Paths.IPSWDir, &c.Paths.DataDir} {
+	for _, p := range []*string{&c.Paths.VphoneCLI, &c.Paths.VMRoot, &c.Paths.IPSWDir, &c.Paths.DataDir, &c.Server.TLSCert, &c.Server.TLSKey} {
 		expanded, err := expandPath(*p)
 		if err != nil {
 			return err

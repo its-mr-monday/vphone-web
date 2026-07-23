@@ -24,19 +24,23 @@ const (
 
 // Node is a registered worker. SystemPassword is never serialized to clients.
 type Node struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Address    string    `json:"address"` // host:port of the agent
-	Status     Status    `json:"status"`
-	Hostname   string    `json:"hostname,omitempty"`
-	Chip       string    `json:"chip,omitempty"`
-	CPU        int       `json:"cpu,omitempty"`
-	MemoryMB   int       `json:"memory_mb,omitempty"`
-	RunningVMs int       `json:"running_vms"`
-	Version    string    `json:"version,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	LastSeen   time.Time `json:"last_seen,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Address  string `json:"address"` // host:port of the agent
+	TLS      bool   `json:"tls"`     // reach the agent over https
+	Status   Status `json:"status"`
+	Hostname string `json:"hostname,omitempty"`
+	Chip     string `json:"chip,omitempty"`
+	CPU      int    `json:"cpu,omitempty"`
+	MemoryMB int    `json:"memory_mb,omitempty"`
+	RunningVMs int  `json:"running_vms"`
+	Version    string `json:"version,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// CertFingerprint is the pinned SHA-256 of the agent's TLS certificate
+	// (hex), used for trust-on-first-use verification of the control link.
+	CertFingerprint string    `json:"cert_fingerprint,omitempty"`
+	LastSeen        time.Time `json:"last_seen,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 
 	SystemPassword string `json:"-"`
 }
@@ -56,19 +60,21 @@ const rfc3339 = time.RFC3339Nano
 
 type store struct{ db *sql.DB }
 
-const nodeCols = `id, name, address, system_password, status, hostname, chip,
-	cpu, memory_mb, running_vms, version, error, last_seen, created_at`
+const nodeCols = `id, name, address, tls, system_password, status, hostname, chip,
+	cpu, memory_mb, running_vms, version, error, cert_fingerprint, last_seen, created_at`
 
 func scanNode(s interface{ Scan(...any) error }) (Node, error) {
 	var (
 		n                   Node
+		tlsInt              int
 		lastSeen, createdAt string
 	)
-	if err := s.Scan(&n.ID, &n.Name, &n.Address, &n.SystemPassword, &n.Status,
+	if err := s.Scan(&n.ID, &n.Name, &n.Address, &tlsInt, &n.SystemPassword, &n.Status,
 		&n.Hostname, &n.Chip, &n.CPU, &n.MemoryMB, &n.RunningVMs, &n.Version,
-		&n.Error, &lastSeen, &createdAt); err != nil {
+		&n.Error, &n.CertFingerprint, &lastSeen, &createdAt); err != nil {
 		return Node{}, err
 	}
+	n.TLS = tlsInt != 0
 	if lastSeen != "" {
 		n.LastSeen, _ = time.Parse(rfc3339, lastSeen)
 	}
@@ -77,14 +83,21 @@ func scanNode(s interface{ Scan(...any) error }) (Node, error) {
 }
 
 func (st *store) insert(n Node) error {
-	_, err := st.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		n.ID, n.Name, n.Address, n.SystemPassword, n.Status, n.Hostname, n.Chip,
-		n.CPU, n.MemoryMB, n.RunningVMs, n.Version, n.Error,
+	_, err := st.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		n.ID, n.Name, n.Address, boolInt(n.TLS), n.SystemPassword, n.Status, n.Hostname, n.Chip,
+		n.CPU, n.MemoryMB, n.RunningVMs, n.Version, n.Error, n.CertFingerprint,
 		tstr(n.LastSeen), n.CreatedAt.Format(rfc3339))
 	if err != nil {
 		return fmt.Errorf("insert node: %w", err)
 	}
 	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (st *store) list() ([]Node, error) {

@@ -5,11 +5,19 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -152,10 +160,33 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		// No write timeout: WebSocket proxies (VNC) are long-lived.
 	}
 
+	// TLS: serve HTTPS when a cert/key is configured, or generate a self-signed
+	// certificate on demand. The same setting secures the --agent control link.
+	tlsEnabled := cfg.Server.TLSEnabled()
+	scheme := "http"
+	if tlsEnabled {
+		scheme = "https"
+		if cfg.Server.TLSCert == "" || cfg.Server.TLSKey == "" {
+			cert, gerr := selfSignedCert(cfg.Server.Host)
+			if gerr != nil {
+				return fmt.Errorf("generate self-signed cert: %w", gerr)
+			}
+			httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+			logger.Warn("serving HTTPS with a self-signed certificate (clients must trust it or skip verification)")
+		}
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("vphone-web listening", "addr", "http://"+addr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("vphone-web listening", "addr", scheme+"://"+addr)
+		var err error
+		if tlsEnabled {
+			// Empty cert/key args use httpServer.TLSConfig (self-signed) when set.
+			err = httpServer.ListenAndServeTLS(cfg.Server.TLSCert, cfg.Server.TLSKey)
+		} else {
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -173,6 +204,54 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return httpServer.Shutdown(ctx)
+}
+
+// selfSignedCert generates an in-memory self-signed ECDSA certificate covering
+// localhost and this host's LAN addresses, valid for one year. Used when HTTPS
+// is enabled without a provided cert/key (labs, worker agents).
+func selfSignedCert(host string) (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serial, err := crand.Int(crand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "vphone-web"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+	if host != "" && host != "0.0.0.0" {
+		if ip := net.ParseIP(host); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else {
+			tmpl.DNSNames = append(tmpl.DNSNames, host)
+		}
+	}
+	for _, a := range lanAddrs() {
+		if ip := net.ParseIP(a); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		}
+	}
+	der, err := x509.CreateCertificate(crand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 // netAddr joins host and port into a listen address.
@@ -201,6 +280,12 @@ func printAgentBanner(cfg config.Config, logger *slog.Logger) {
 		fmt.Fprintf(os.Stderr, "  │   Address:         %s:%d\n", a, port)
 	}
 	fmt.Fprintln(os.Stderr, "  │   System password: (your VPHONE_SYSTEM_PASSWORD)")
+	if cfg.Server.TLSEnabled() {
+		fmt.Fprintln(os.Stderr, "  │   TLS (HTTPS):     enable the toggle — this agent serves HTTPS.")
+		if cfg.Server.TLSCert == "" {
+			fmt.Fprintln(os.Stderr, "  │                    (self-signed — accept the certificate fingerprint once)")
+		}
+	}
 	fmt.Fprintln(os.Stderr, "  └─────────────────────────────────────────────────────────────────────")
 	fmt.Fprintln(os.Stderr, "")
 	logger.Info("agent mode enabled", "port", port, "addresses", addrs)

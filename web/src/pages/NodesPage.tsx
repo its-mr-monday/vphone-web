@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Server, Plus, Trash2, Cpu, MemoryStick, Boxes } from "lucide-react";
-import { api, ApiError, formatBytes, type ClusterNode, type NodeStatus } from "../api/client";
+import { Server, Plus, Trash2, Cpu, MemoryStick, Boxes, Lock, ShieldAlert } from "lucide-react";
+import {
+  api,
+  ApiError,
+  formatBytes,
+  type ClusterNode,
+  type NodeStatus,
+  type CertTrustPrompt,
+} from "../api/client";
 import { useAuth } from "../hooks/useAuth";
 import { Button } from "../components/ui/Button";
 
@@ -23,28 +30,52 @@ export function NodesPage() {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [pw, setPw] = useState("");
+  const [tls, setTls] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [trust, setTrust] = useState<CertTrustPrompt | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["nodes"] });
-  const register = useMutation({
-    mutationFn: () => api.registerNode({ name: name.trim(), address: address.trim(), system_password: pw }),
-    onSuccess: invalidate,
-  });
   const del = useMutation({ mutationFn: (id: string) => api.deleteNode(id), onSuccess: invalidate });
 
   if (!isAdmin) return <Centered>Admin access required.</Centered>;
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  function reset() {
+    setName("");
+    setAddress("");
+    setPw("");
+    setTls(false);
+  }
+
+  // Register (optionally accepting a pinned cert fingerprint on the 2nd attempt).
+  async function doRegister(trustFingerprint?: string) {
+    setBusy(true);
     setError(null);
     try {
-      await register.mutateAsync();
-      setName("");
-      setAddress("");
-      setPw("");
+      const res = await api.registerNode({
+        name: name.trim(),
+        address: address.trim(),
+        system_password: pw,
+        tls,
+        trust_fingerprint: trustFingerprint,
+      });
+      if ("trust" in res) {
+        setTrust(res.trust); // untrusted cert → prompt to accept
+        return;
+      }
+      setTrust(null);
+      reset();
+      invalidate();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "failed to register node");
+    } finally {
+      setBusy(false);
     }
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    void doRegister();
   }
 
   return (
@@ -68,15 +99,33 @@ export function NodesPage() {
           <Field label="System password">
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="shared secret" className="n-input w-48" />
           </Field>
-          <Button type="submit" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} disabled={register.isPending || !name.trim() || !address.trim()}>
-            {register.isPending ? "Connecting…" : "Add node"}
+          <label className="flex cursor-pointer items-center gap-2 pb-1.5">
+            <input type="checkbox" checked={tls} onChange={(e) => setTls(e.target.checked)} className="accent-[var(--color-accent)]" />
+            <span className="flex items-center gap-1 font-mono text-[11px] text-fg-muted">
+              <Lock className="h-3 w-3" /> HTTPS (TLS)
+            </span>
+          </label>
+          <Button type="submit" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} disabled={busy || !name.trim() || !address.trim()}>
+            {busy ? "Connecting…" : "Add node"}
           </Button>
         </form>
         {error && <p className="mt-2 font-mono text-xs text-error">{error}</p>}
         <p className="mt-2 font-mono text-[10px] text-fg-dim">
           The agent prints its address + password hint on startup. Registration validates the control link before saving.
+          Enable <span className="text-fg-muted">HTTPS (TLS)</span> if the agent serves over TLS — you'll confirm its
+          certificate fingerprint on first contact.
         </p>
       </div>
+
+      {trust && (
+        <TrustDialog
+          prompt={trust}
+          address={address.trim()}
+          busy={busy}
+          onAccept={() => doRegister(trust.fingerprint)}
+          onCancel={() => setTrust(null)}
+        />
+      )}
 
       <div className="flex-1 overflow-y-auto p-6">
         {nodes && nodes.length > 0 ? (
@@ -104,6 +153,62 @@ export function NodesPage() {
   );
 }
 
+// TrustDialog implements trust-on-first-use: show the presented certificate's
+// fingerprint so the operator can verify it out-of-band before pinning it.
+function TrustDialog({
+  prompt,
+  address,
+  busy,
+  onAccept,
+  onCancel,
+}: {
+  prompt: CertTrustPrompt;
+  address: string;
+  busy: boolean;
+  onAccept: () => void;
+  onCancel: () => void;
+}) {
+  const fp = prompt.fingerprint.match(/.{1,2}/g)?.join(":").toUpperCase() ?? prompt.fingerprint;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} className="w-[520px] rounded-md border border-warn/50 bg-surface shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <ShieldAlert className="h-4 w-4 text-warn" />
+          <h2 className="font-mono text-sm uppercase tracking-wide text-fg">Untrusted certificate</h2>
+        </div>
+        <div className="space-y-3 px-4 py-4 font-mono text-xs text-fg-muted">
+          <p>
+            <span className="text-fg">{address}</span> presented a TLS certificate that isn't signed by a trusted
+            authority (typical for a self-signed agent). Verify the fingerprint below matches the agent, then accept to
+            pin it. If it later changes, you'll be warned again — protecting against man-in-the-middle.
+          </p>
+          <div className="rounded-sm border border-border bg-base p-3">
+            <Row k="SHA-256" v={fp} accent />
+            {prompt.subject && <Row k="Subject" v={prompt.subject} />}
+            {prompt.issuer && <Row k="Issuer" v={prompt.issuer} />}
+            {prompt.expires && <Row k="Expires" v={prompt.expires} />}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+          <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button type="button" variant="primary" onClick={onAccept} disabled={busy}>
+            {busy ? "Pinning…" : "Trust & add"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
+  return (
+    <div className="flex gap-3 py-0.5">
+      <span className="w-20 shrink-0 text-[10px] uppercase tracking-widest text-fg-dim">{k}</span>
+      <span className={`break-all ${accent ? "text-accent" : "text-fg"}`}>{v}</span>
+    </div>
+  );
+}
+
 function NodeCard({ node, onDelete }: { node: ClusterNode; onDelete: () => void }) {
   return (
     <div className="rounded-md border border-border bg-surface p-4">
@@ -112,8 +217,11 @@ function NodeCard({ node, onDelete }: { node: ClusterNode; onDelete: () => void 
           <div className="flex items-center gap-2">
             <StatusDot status={node.status} />
             <span className="truncate font-mono text-sm text-fg">{node.name}</span>
+            {node.tls && <Lock className="h-3 w-3 text-success" aria-label="HTTPS control link" />}
           </div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-fg-dim">{node.address}</div>
+          <div className="mt-0.5 truncate font-mono text-[10px] text-fg-dim">
+            {node.tls ? "https://" : "http://"}{node.address}
+          </div>
         </div>
         <button onClick={onDelete} className="text-fg-dim hover:text-error" title="Remove node">
           <Trash2 className="h-3.5 w-3.5" />

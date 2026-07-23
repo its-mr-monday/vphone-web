@@ -73,6 +73,21 @@ type registerNodeRequest struct {
 	Name           string `json:"name"`
 	Address        string `json:"address"` // host:port
 	SystemPassword string `json:"system_password"`
+	TLS            bool   `json:"tls"` // reach the agent over https
+	// TrustFingerprint, when set, accepts the agent's TLS certificate whose
+	// SHA-256 matches it (trust-on-first-use). Omit on the first attempt.
+	TrustFingerprint string `json:"trust_fingerprint"`
+}
+
+// certTrustResponse is returned (409) when an HTTPS agent's certificate has not
+// yet been trusted, so the UI can prompt the operator to accept it.
+type certTrustResponse struct {
+	NeedsTrust  bool   `json:"needs_trust"`
+	Fingerprint string `json:"fingerprint"`
+	Subject     string `json:"subject,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	Expires     string `json:"expires,omitempty"`
+	Message     string `json:"message"`
 }
 
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
@@ -85,8 +100,21 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	node, err := s.cluster.Register(req.Name, req.Address, req.SystemPassword)
+	node, err := s.cluster.Register(req.Name, req.Address, req.SystemPassword, req.TLS, req.TrustFingerprint)
 	if err != nil {
+		// First HTTPS contact with an untrusted certificate → prompt to accept.
+		var untrusted *cluster.CertUntrustedError
+		if errors.As(err, &untrusted) {
+			writeJSON(w, http.StatusConflict, certTrustResponse{
+				NeedsTrust:  true,
+				Fingerprint: untrusted.Fingerprint,
+				Subject:     untrusted.Subject,
+				Issuer:      untrusted.Issuer,
+				Expires:     untrusted.Expires.Format("2006-01-02"),
+				Message:     "The agent presented an untrusted TLS certificate. Verify the fingerprint and accept to pin it.",
+			})
+			return
+		}
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
