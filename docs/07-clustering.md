@@ -1,17 +1,35 @@
 # 7. Clustering
 
-vphone-web can act as a **controller** that registers and health-monitors
-**worker** hosts. One binary is both roles — `--agent` only changes startup
-behavior. This is designed for a fleet of Mac minis running phones.
+vphone-web can act as a **controller** that manages a fleet of **worker** hosts
+from one UI — a vSphere-style single pane of glass. One binary is both roles —
+`--agent` only changes startup behavior. This is designed for a fleet of Mac
+minis running phones.
 
-> **Current scope (be aware):** clustering today is a **health-monitored
-> registry**. The controller registers workers, proves the control link, and
-> shows each worker's live capacity and status (chip, CPU, memory, running VM
-> count, version). It does **not yet proxy VM operations** — you can't boot or
-> view a VM on a remote node *through* the controller. Each node still manages
-> its own VMs locally. The registry + the export/import bundles
-> ([Managing VMs](04-managing-vms.md)) are the building blocks for cross-node
-> workflows.
+## What the controller can do
+
+Once a worker is registered, the controller manages its VMs **as if they were
+local** — every per-VM operation is transparently proxied to the owning node
+over the (TLS-pinned) control link:
+
+- **Unified VM list** — `GET /vms` and the dashboard show the controller's own
+  VMs *and* every online worker's VMs in one list, each tagged with its node.
+- **Full lifecycle & control** — open a remote VM, stream its **VNC display** and
+  **SSH terminal** (WebSockets tunnel through the controller), inject touch/keys,
+  screenshot, boot/stop/restart, edit its config, manage snapshots, and drive
+  Frida — all against a VM on another host.
+- **Deploy to a node** — the create wizard's **Deploy to** selector builds a new
+  VM on the chosen worker (the firmware must already be in that node's IPSW
+  library).
+
+Health monitoring continues underneath: each worker's capacity and status (chip,
+CPU, memory, running VM count, version) is polled on the heartbeat interval.
+
+> **Current limitations:** the create wizard lists the *controller's* IPSW
+> library, so deploying a provisioned VM to a worker requires that firmware to
+> already exist on the worker (bare-shell VMs deploy anywhere). Remote
+> **job logs** (e.g. a remote Frida install or provisioning pipeline) don't yet
+> stream back through the controller — watch them on the worker directly. These
+> are the remaining gaps toward full parity.
 
 ## The shared secret
 
