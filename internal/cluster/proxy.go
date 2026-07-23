@@ -125,6 +125,50 @@ func (m *Manager) RemoteVMs() []map[string]any {
 	return out
 }
 
+// FindJobNode locates the worker node that owns a job id by querying each online
+// node's job endpoint (cached after the first hit). Used to route a remote job's
+// detail/logs/cancel through the controller.
+func (m *Manager) FindJobNode(ctx context.Context, jobID string) (Node, bool) {
+	m.jobMu.Lock()
+	nid, cached := m.jobNodeCache[jobID]
+	m.jobMu.Unlock()
+	if cached {
+		if n, err := m.store.get(nid); err == nil {
+			return n, true
+		}
+	}
+	nodes, err := m.store.list()
+	if err != nil {
+		return Node{}, false
+	}
+	for _, n := range nodes {
+		if n.Status != StatusOnline {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.BaseURL()+"/api/v1/jobs/"+jobID, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set(SystemPasswordHeader, n.SystemPassword)
+		resp, err := m.clientFor(n).Do(req)
+		if err != nil {
+			continue
+		}
+		found := resp.StatusCode == http.StatusOK
+		resp.Body.Close()
+		if found {
+			m.jobMu.Lock()
+			if m.jobNodeCache == nil {
+				m.jobNodeCache = map[string]string{}
+			}
+			m.jobNodeCache[jobID] = n.ID
+			m.jobMu.Unlock()
+			return n, true
+		}
+	}
+	return Node{}, false
+}
+
 // NodeForVM returns the worker node that owns a VM id (with credentials), if the
 // VM lives on a remote node. Local VMs return ok=false.
 func (m *Manager) NodeForVM(vmID string) (Node, bool) {

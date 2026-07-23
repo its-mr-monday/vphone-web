@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Check, HardDriveDownload, Cpu } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, formatBytes, type Variant, type NetworkMode } from "../api/client";
-import { useIPSWs } from "../hooks/useIPSW";
 import { useCreateVM } from "../hooks/useVM";
 import { Button } from "../components/ui/Button";
 
@@ -16,7 +15,6 @@ const VARIANTS: { value: Variant; label: string; desc: string }[] = [
 
 export function CreateVMPage() {
   const navigate = useNavigate();
-  const { data: ipsws } = useIPSWs();
   const create = useCreateVM();
 
   const [step, setStep] = useState(0);
@@ -33,6 +31,11 @@ export function CreateVMPage() {
   const { data: interfaces } = useQuery({ queryKey: ["interfaces"], queryFn: api.systemInterfaces });
   const { data: nodes } = useQuery({ queryKey: ["nodes"], queryFn: api.listNodes });
   const onlineNodes = (nodes ?? []).filter((n) => n.status === "ONLINE");
+  // IPSW library of the deploy target (this host, or a worker node's library).
+  const { data: ipsws } = useQuery({
+    queryKey: ["ipsws", nodeId || "local"],
+    queryFn: () => (nodeId ? api.nodeIPSWs(nodeId) : api.listIPSWs()),
+  });
 
   const ready = (ipsws ?? []).filter((i) => i.status === "READY" || i.status === "REGISTERED");
   const selectedIpsw = ready.find((i) => i.id === ipswId);
@@ -105,6 +108,29 @@ export function CreateVMPage() {
         <div className="mx-auto max-w-2xl">
           {step === 0 && (
             <Section title="Choose firmware">
+              {onlineNodes.length > 0 && (
+                <div className="mb-4 rounded-md border border-border bg-surface p-3">
+                  <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                    Deploy to
+                  </span>
+                  <select
+                    value={nodeId}
+                    onChange={(e) => {
+                      setNodeId(e.target.value);
+                      setIpswId(""); // firmware library differs per node
+                    }}
+                    className="wiz-input"
+                  >
+                    <option value="">This host (controller)</option>
+                    {onlineNodes.map((n) => (
+                      <option key={n.id} value={n.id}>{n.name} · {n.address}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 font-mono text-[10px] text-fg-dim">
+                    firmware below comes from the selected host's IPSW library
+                  </p>
+                </div>
+              )}
               <button
                 onClick={() => setIpswId("")}
                 className={`mb-2 w-full rounded-md border px-4 py-3 text-left transition-colors ${
@@ -118,7 +144,7 @@ export function CreateVMPage() {
               </button>
               {ready.length === 0 ? (
                 <p className="rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 font-mono text-[11px] text-warn">
-                  No IPSWs in the library. Add one on the IPSW page to run the full pipeline.
+                  No IPSWs in {nodeId ? "this node's" : "the"} library. Add one on the IPSW page to run the full pipeline.
                 </p>
               ) : (
                 ready.map((it) => (
@@ -237,24 +263,6 @@ export function CreateVMPage() {
 
           {step === 3 && (
             <Section title="Confirm">
-              {onlineNodes.length > 0 && (
-                <div className="mb-4">
-                  <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">
-                    Deploy to
-                  </span>
-                  <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} className="wiz-input">
-                    <option value="">This host (controller)</option>
-                    {onlineNodes.map((n) => (
-                      <option key={n.id} value={n.id}>{n.name} · {n.address}</option>
-                    ))}
-                  </select>
-                  {nodeId && selectedIpsw && (
-                    <p className="mt-1 font-mono text-[10px] text-warn">
-                      The selected firmware must already be in the target node's IPSW library.
-                    </p>
-                  )}
-                </div>
-              )}
               <div className="rounded-md border border-border bg-surface p-4">
                 <Row k="Name" v={name || "—"} />
                 <Row k="Deploy to" v={nodeId ? (onlineNodes.find((n) => n.id === nodeId)?.name ?? nodeId) : "This host"} />

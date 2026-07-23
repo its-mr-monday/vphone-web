@@ -69,6 +69,7 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.Get("/nodes", s.listNodes)
 			r.Post("/nodes", s.registerNode)
 			r.Delete("/nodes/{id}", s.deleteNode)
+			r.Get("/nodes/{id}/ipsws", s.nodeIPSWs)
 		})
 
 		r.Route("/vms", func(r chi.Router) {
@@ -118,10 +119,11 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 
 		r.Route("/jobs", func(r chi.Router) {
 			r.With(user).Get("/", s.listJobs)
+			// Per-job routes proxy to the owning node when the job is remote.
 			r.Route("/{id}", func(r chi.Router) {
-				r.With(user).Get("/", s.getJob)
-				r.With(admin).Post("/cancel", s.cancelJob)
-				r.With(user).Get("/logs", s.jobLogsWS)
+				r.With(user, s.routeRemoteJob).Get("/", s.getJob)
+				r.With(admin, s.routeRemoteJob).Post("/cancel", s.cancelJob)
+				r.With(user, s.routeRemoteJob).Get("/logs", s.jobLogsWS)
 			})
 		})
 

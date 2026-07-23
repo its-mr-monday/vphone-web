@@ -268,6 +268,8 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
   deleteIPSW: (id: string) => request<void>(`/ipsws/${id}`, { method: "DELETE" }),
+  // A worker node's IPSW library (proxied by the controller).
+  nodeIPSWs: (nodeID: string) => request<IPSW[]>(`/nodes/${nodeID}/ipsws`),
 
   // Snapshots
   listSnapshots: (vmID: string) => request<Snapshot[]>(`/vms/${vmID}/snapshots`),

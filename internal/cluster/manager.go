@@ -57,6 +57,10 @@ type Manager struct {
 	// for the aggregated list and per-VM routing.
 	vmMu    sync.Mutex
 	vmCache map[string][]map[string]any
+
+	// jobNodeCache maps a job id → owning node id (lazily discovered).
+	jobMu        sync.Mutex
+	jobNodeCache map[string]string
 }
 
 // NewManager constructs the cluster manager.

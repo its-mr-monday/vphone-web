@@ -25,6 +25,10 @@ export function DashboardPage() {
   const vmDiskPct = sys?.vm_disk.total_bytes
     ? Math.round((sys.vm_disk.used_bytes / sys.vm_disk.total_bytes) * 100)
     : 0;
+  // VM counters come from the unified list (local + every worker node).
+  const totalVMs = vms?.length ?? 0;
+  const runningVMs = vms?.filter((v) => v.status === "RUNNING").length ?? 0;
+  const hasRemote = vms?.some((v) => v.node_id) ?? false;
 
   return (
     <div className="flex h-full flex-col">
@@ -72,11 +76,11 @@ export function DashboardPage() {
 
       {/* Stat strip */}
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border lg:grid-cols-4">
-        <Stat icon={<Server className="h-4 w-4" />} label="Total VMs" value={sys ? String(sys.total_vms) : "—"} />
+        <Stat icon={<Server className="h-4 w-4" />} label={hasRemote ? "Total VMs (cluster)" : "Total VMs"} value={String(totalVMs)} />
         <Stat
           icon={<Activity className="h-4 w-4 text-success" />}
           label="Running"
-          value={sys ? `${sys.running_vms} / ${sys.max_concurrent_vms}` : "—"}
+          value={hasRemote ? String(runningVMs) : sys ? `${runningVMs} / ${sys.max_concurrent_vms}` : String(runningVMs)}
           accent
         />
         <Stat icon={<ListChecks className="h-4 w-4" />} label="Active Jobs" value={sys ? String(sys.active_jobs) : "—"} />

@@ -13,6 +13,13 @@ import (
 // listJobs handles GET /api/v1/jobs?vm=<id>&limit=<n>.
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	vmID := r.URL.Query().Get("vm")
+	// Jobs for a remote VM live on that VM's node — proxy the query there.
+	if vmID != "" && s.cluster != nil {
+		if node, ok := s.cluster.NodeForVM(vmID); ok {
+			s.proxyToNode(node, w, r)
+			return
+		}
+	}
 	limit := 100
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

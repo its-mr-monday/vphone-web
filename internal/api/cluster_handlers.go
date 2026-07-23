@@ -121,6 +121,26 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, node)
 }
 
+// nodeIPSWs handles GET /api/v1/nodes/{id}/ipsws — the IPSW library of a worker
+// node, proxied over the control link (so the create wizard can pick firmware
+// that exists on the deploy target).
+func (s *Server) nodeIPSWs(w http.ResponseWriter, r *http.Request) {
+	if s.cluster == nil {
+		writeError(w, http.StatusServiceUnavailable, "clustering not available")
+		return
+	}
+	node, err := s.cluster.Get(chi.URLParam(r, "id"))
+	if errors.Is(err, cluster.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load node")
+		return
+	}
+	s.proxyToNodePath(node, "/api/v1/ipsws", w, r)
+}
+
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	if s.cluster == nil {
 		writeError(w, http.StatusServiceUnavailable, "clustering not available")
