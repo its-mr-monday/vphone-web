@@ -30,6 +30,7 @@ export interface VM {
   ios_version: string;
   ipsw_id?: string;
   network_mode: string;
+  network_interface?: string;
   cpu: number;
   memory: number;
   disk_size: number;
@@ -53,9 +54,17 @@ export interface CreateVMRequest {
   ios_version?: string;
   ipsw_id?: string;
   network_mode?: NetworkMode;
+  network_interface?: string;
   cpu?: number;
   memory?: number;
   disk_size?: number;
+}
+
+export interface HostInterface {
+  name: string;
+  type: string;
+  wired: boolean;
+  addrs: string[];
 }
 
 export type JobStatus =
@@ -226,6 +235,7 @@ export const api = {
   // System
   systemStatus: () => request<SystemStatus>("/system/status"),
   systemConfig: () => request<SystemConfig>("/system/config"),
+  systemInterfaces: () => request<HostInterface[]>("/system/interfaces"),
 
   // Auth
   me: () => request<AuthStatus>("/auth/me"),

@@ -42,6 +42,7 @@ func (m *Manager) provision(v VM, ipswPath string) {
 			"MEMORY=" + strconv.Itoa(v.Memory),
 			"DISK_SIZE=" + strconv.Itoa(diskGiB(v.DiskSize)),
 			"NETWORK_MODE=" + networkModeOrDefault(v.NetworkMode),
+			"NET_INTERFACE=" + v.NetworkInterface,
 		},
 	})); err != nil {
 		m.failStep(v.ID, "vm_new", err)

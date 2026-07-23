@@ -64,22 +64,23 @@ func SetVNCPassword(pw string) {
 // VM is the persisted representation of a virtual iPhone. It is the shape
 // returned by the API and stored in the database.
 type VM struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Status        Status    `json:"status"`
-	Variant       Variant   `json:"variant"`
-	IOSVersion    string    `json:"ios_version"`
-	IPSWID        string    `json:"ipsw_id,omitempty"`
-	NetworkMode   string    `json:"network_mode"` // nat | bridged | hostOnly | none
-	CPU           int       `json:"cpu"`
-	Memory        int       `json:"memory"`    // MiB
-	DiskSize      int       `json:"disk_size"` // MiB
-	PortBlockBase int       `json:"port_block_base"`
-	VMDir         string    `json:"vm_dir"`
-	PID           int       `json:"pid,omitempty"`
-	ErrorMessage  string    `json:"error_message,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Status           Status    `json:"status"`
+	Variant          Variant   `json:"variant"`
+	IOSVersion       string    `json:"ios_version"`
+	IPSWID           string    `json:"ipsw_id,omitempty"`
+	NetworkMode      string    `json:"network_mode"`      // nat | bridged | hostOnly | none
+	NetworkInterface string    `json:"network_interface"` // host bridge interface (bridged mode)
+	CPU              int       `json:"cpu"`
+	Memory           int       `json:"memory"`    // MiB
+	DiskSize         int       `json:"disk_size"` // MiB
+	PortBlockBase    int       `json:"port_block_base"`
+	VMDir            string    `json:"vm_dir"`
+	PID              int       `json:"pid,omitempty"`
+	ErrorMessage     string    `json:"error_message,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 
 	// Derived fields, included for client convenience.
 	Ports        PortBlock `json:"ports"`

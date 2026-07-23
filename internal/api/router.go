@@ -102,6 +102,7 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 
 		r.With(user).Get("/system/status", s.systemStatusHandler)
 		r.With(admin).Get("/system/config", s.systemConfigHandler)
+		r.With(admin).Get("/system/interfaces", s.systemInterfacesHandler)
 	})
 
 	if s.cfg.Server.DevProxy != "" {

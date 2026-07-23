@@ -100,14 +100,15 @@ func (m *Manager) RunningCount() (int, error) {
 
 // CreateParams are the inputs for creating a VM.
 type CreateParams struct {
-	Name        string
-	Variant     Variant
-	IOSVersion  string
-	IPSWID      string // when set, the full provisioning pipeline runs
-	NetworkMode string // nat | bridged | hostOnly | none (default nat)
-	CPU         int
-	Memory      int
-	DiskSize    int
+	Name             string
+	Variant          Variant
+	IOSVersion       string
+	IPSWID           string // when set, the full provisioning pipeline runs
+	NetworkMode      string // nat | bridged | hostOnly | none (default nat)
+	NetworkInterface string // host interface to bridge to (bridged mode; e.g. en0)
+	CPU              int
+	Memory           int
+	DiskSize         int
 }
 
 // validNetworkModes is the set of accepted network modes.
@@ -172,23 +173,24 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 
 	now := time.Now()
 	v := VM{
-		ID:            id,
-		Name:          name,
-		Status:        StatusCreating,
-		Variant:       p.Variant,
-		IOSVersion:    p.IOSVersion,
-		IPSWID:        p.IPSWID,
-		NetworkMode:   p.NetworkMode,
-		CPU:           p.CPU,
-		Memory:        p.Memory,
-		DiskSize:      p.DiskSize,
-		PortBlockBase: block.Base,
-		VMDir:         vmDir,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Ports:         block,
-		ScreenWidth:   DefaultScreenWidth,
-		ScreenHeight:  DefaultScreenHeight,
+		ID:               id,
+		Name:             name,
+		Status:           StatusCreating,
+		Variant:          p.Variant,
+		IOSVersion:       p.IOSVersion,
+		IPSWID:           p.IPSWID,
+		NetworkMode:      p.NetworkMode,
+		NetworkInterface: p.NetworkInterface,
+		CPU:              p.CPU,
+		Memory:           p.Memory,
+		DiskSize:         p.DiskSize,
+		PortBlockBase:    block.Base,
+		VMDir:            vmDir,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Ports:            block,
+		ScreenWidth:      DefaultScreenWidth,
+		ScreenHeight:     DefaultScreenHeight,
 	}
 	if err := m.store.insert(v); err != nil {
 		m.ports.Release(block.Base)

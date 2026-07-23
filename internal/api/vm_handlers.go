@@ -22,14 +22,15 @@ func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 
 // createVMRequest is the POST /api/v1/vms body.
 type createVMRequest struct {
-	Name        string `json:"name"`
-	Variant     string `json:"variant"`
-	IOSVersion  string `json:"ios_version"`
-	IPSWID      string `json:"ipsw_id"`
-	NetworkMode string `json:"network_mode"`
-	CPU         int    `json:"cpu"`
-	Memory      int    `json:"memory"`
-	DiskSize    int    `json:"disk_size"`
+	Name             string `json:"name"`
+	Variant          string `json:"variant"`
+	IOSVersion       string `json:"ios_version"`
+	IPSWID           string `json:"ipsw_id"`
+	NetworkMode      string `json:"network_mode"`
+	NetworkInterface string `json:"network_interface"`
+	CPU              int    `json:"cpu"`
+	Memory           int    `json:"memory"`
+	DiskSize         int    `json:"disk_size"`
 }
 
 // createVM handles POST /api/v1/vms. It kicks off the provisioning pipeline and
@@ -43,14 +44,15 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err := s.vms.Create(vm.CreateParams{
-		Name:        req.Name,
-		Variant:     vm.Variant(req.Variant),
-		IOSVersion:  req.IOSVersion,
-		IPSWID:      req.IPSWID,
-		NetworkMode: req.NetworkMode,
-		CPU:         req.CPU,
-		Memory:      req.Memory,
-		DiskSize:    req.DiskSize,
+		Name:             req.Name,
+		Variant:          vm.Variant(req.Variant),
+		IOSVersion:       req.IOSVersion,
+		IPSWID:           req.IPSWID,
+		NetworkMode:      req.NetworkMode,
+		NetworkInterface: req.NetworkInterface,
+		CPU:              req.CPU,
+		Memory:           req.Memory,
+		DiskSize:         req.DiskSize,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Check, HardDriveDownload, Cpu } from "lucide-react";
-import { ApiError, formatBytes, type Variant, type NetworkMode } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
+import { api, ApiError, formatBytes, type Variant, type NetworkMode } from "../api/client";
 import { useIPSWs } from "../hooks/useIPSW";
 import { useCreateVM } from "../hooks/useVM";
 import { Button } from "../components/ui/Button";
@@ -26,7 +27,9 @@ export function CreateVMPage() {
   const [memory, setMemory] = useState(4096);
   const [disk, setDisk] = useState(16384);
   const [network, setNetwork] = useState<NetworkMode>("nat");
+  const [iface, setIface] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const { data: interfaces } = useQuery({ queryKey: ["interfaces"], queryFn: api.systemInterfaces });
 
   const ready = (ipsws ?? []).filter((i) => i.status === "READY" || i.status === "REGISTERED");
   const selectedIpsw = ready.find((i) => i.id === ipswId);
@@ -42,6 +45,7 @@ export function CreateVMPage() {
         ios_version: selectedIpsw?.version ?? "",
         ipsw_id: ipswId || undefined,
         network_mode: network,
+        network_interface: network === "bridged" ? iface || undefined : undefined,
         cpu,
         memory,
         disk_size: disk,
@@ -185,6 +189,41 @@ export function CreateVMPage() {
                     </button>
                   ))}
                 </div>
+
+                {network === "bridged" && (
+                  <div className="mt-3">
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                      Bridge interface
+                    </span>
+                    <select value={iface} onChange={(e) => setIface(e.target.value)} className="wiz-input">
+                      <option value="">first available</option>
+                      {(interfaces ?? []).map((i) => (
+                        <option key={i.name} value={i.name}>
+                          {i.name} · {i.type} · {i.addrs[0] ?? "no ip"}
+                          {!i.wired ? " (Wi-Fi — bridging won't get DHCP)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {(() => {
+                      const sel = (interfaces ?? []).find((i) => i.name === iface);
+                      if (sel && !sel.wired) {
+                        return (
+                          <p className="mt-1 font-mono text-[10px] text-warn">
+                            {sel.type} interfaces can't be bridged (the AP won't pass the VM's MAC). Use a wired NIC for a LAN lease.
+                          </p>
+                        );
+                      }
+                      if (!(interfaces ?? []).some((i) => i.wired)) {
+                        return (
+                          <p className="mt-1 font-mono text-[10px] text-warn">
+                            No wired interface detected — bridged mode will fall back to link-local (169.254.x). Works on wired hosts.
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
               </div>
               <style>{wizInputStyle}</style>
             </Section>

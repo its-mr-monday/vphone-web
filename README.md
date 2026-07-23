@@ -34,6 +34,13 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
   capture and download (full-resolution PNG).
 - **Adopt existing VMs** — import a VM directory provisioned directly by
   vphone-cli (Import Device), and delete VMs as a tracked job with live progress.
+- **Networking** — per-VM NAT (shared) or **bridged** (the VM joins the physical
+  LAN with its own DHCP lease, so peers can SSH it directly). The create wizard
+  picks the host bridge interface and flags Wi-Fi (bridging needs a wired NIC).
+- **Access control** — optional users/roles (`vphone-admin` / `vphone-user`) with
+  local + LDAP/OIDC/SAML providers; disabled by default.
+- **Clustering** — a controller manages worker nodes (`vphone-web --agent`),
+  registered by address + system password and health-monitored (ONLINE/OFFLINE).
 - **Snapshots** — create / restore / delete backups (`vm_backup` / `vm_switch`),
   isolated per VM.
 - **Dashboard** — VM fleet by status, running count, active jobs, host disk usage.

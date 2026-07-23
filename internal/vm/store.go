@@ -25,8 +25,8 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 	)
 	if err := s.Scan(
 		&v.ID, &v.Name, &v.Status, &v.Variant, &v.IOSVersion, &v.IPSWID,
-		&v.NetworkMode, &v.CPU, &v.Memory, &v.DiskSize, &v.PortBlockBase, &v.VMDir,
-		&v.PID, &v.ErrorMessage, &createdAt, &updatedAt,
+		&v.NetworkMode, &v.NetworkInterface, &v.CPU, &v.Memory, &v.DiskSize,
+		&v.PortBlockBase, &v.VMDir, &v.PID, &v.ErrorMessage, &createdAt, &updatedAt,
 	); err != nil {
 		return VM{}, err
 	}
@@ -45,17 +45,17 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 }
 
 const vmColumns = `id, name, status, variant, ios_version, ipsw_id, network_mode,
-	cpu, memory, disk_size, port_block_base, vm_dir, pid, error_message,
-	created_at, updated_at`
+	network_interface, cpu, memory, disk_size, port_block_base, vm_dir, pid,
+	error_message, created_at, updated_at`
 
 // insert persists a new VM.
 func (s *store) insert(v VM) error {
 	_, err := s.db.Exec(
 		`INSERT INTO vms (`+vmColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.ID, v.Name, v.Status, v.Variant, v.IOSVersion, v.IPSWID, v.NetworkMode,
-		v.CPU, v.Memory, v.DiskSize, v.PortBlockBase, v.VMDir, v.PID, v.ErrorMessage,
-		v.CreatedAt.Format(rfc3339), v.UpdatedAt.Format(rfc3339),
+		v.NetworkInterface, v.CPU, v.Memory, v.DiskSize, v.PortBlockBase, v.VMDir,
+		v.PID, v.ErrorMessage, v.CreatedAt.Format(rfc3339), v.UpdatedAt.Format(rfc3339),
 	)
 	if err != nil {
 		return fmt.Errorf("insert vm: %w", err)
