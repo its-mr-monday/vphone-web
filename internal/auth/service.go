@@ -127,6 +127,23 @@ func (s *Service) Login(ctx context.Context, username, password, userAgent, ip s
 	return User{}, "", fmt.Errorf("invalid credentials")
 }
 
+// LoginExternal provisions a user from an already-verified external identity
+// (from a redirect-based provider like OIDC or SAML) and starts a session. Use
+// this from provider callback handlers, where there is no password to check.
+func (s *Service) LoginExternal(provider string, ident ExternalIdentity, userAgent, ip string) (User, string, error) {
+	if strings.TrimSpace(ident.Username) == "" {
+		return User{}, "", fmt.Errorf("external identity missing username")
+	}
+	u, err := s.provisionExternal(provider, ident)
+	if err != nil {
+		return User{}, "", err
+	}
+	if u.Disabled {
+		return User{}, "", fmt.Errorf("account disabled")
+	}
+	return s.startSession(u, userAgent, ip)
+}
+
 // provisionExternal creates or updates a user from an external identity, mapping
 // groups to a role.
 func (s *Service) provisionExternal(provider string, ident ExternalIdentity) (User, error) {

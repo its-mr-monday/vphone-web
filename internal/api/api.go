@@ -23,6 +23,8 @@ type Server struct {
 	jobs    *jobs.Queue
 	ipsw    *ipsw.Library
 	auth    *auth.Service
+	oidc    *auth.OIDCProvider // nil when OIDC is not configured
+	saml    *auth.SAMLProvider // nil when SAML is not configured
 	cluster *cluster.Manager
 	version string
 	log     *slog.Logger
@@ -34,6 +36,8 @@ type Deps struct {
 	Jobs    *jobs.Queue
 	IPSW    *ipsw.Library
 	Auth    *auth.Service
+	OIDC    *auth.OIDCProvider
+	SAML    *auth.SAMLProvider
 	Cluster *cluster.Manager
 	Version string
 	Log     *slog.Logger
@@ -50,6 +54,7 @@ func NewServer(cfg config.Config, d Deps) *Server {
 	}
 	return &Server{
 		cfg: cfg, vms: d.VMs, jobs: d.Jobs, ipsw: d.IPSW, auth: d.Auth,
+		oidc: d.OIDC, saml: d.SAML,
 		cluster: d.Cluster, version: d.Version, log: log,
 	}
 }
