@@ -222,7 +222,42 @@ export const api = {
   // System
   systemStatus: () => request<SystemStatus>("/system/status"),
   systemConfig: () => request<SystemConfig>("/system/config"),
+
+  // Auth
+  me: () => request<AuthStatus>("/auth/me"),
+  authProviders: () => request<AuthStatus>("/auth/providers"),
+  login: (username: string, password: string) =>
+    request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+
+  // Users (admin)
+  listUsers: () => request<AuthUser[]>("/users"),
+  createUser: (body: { username: string; password: string; role: UserRole }) =>
+    request<AuthUser>("/users", { method: "POST", body: JSON.stringify(body) }),
+  updateUser: (id: string, body: { role?: UserRole; password?: string; disabled?: boolean }) =>
+    request<{ ok: boolean }>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteUser: (id: string) => request<void>(`/users/${id}`, { method: "DELETE" }),
 };
+
+export type UserRole = "vphone-admin" | "vphone-user";
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  email?: string;
+  role: UserRole;
+  provider: string;
+  disabled: boolean;
+  must_change?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthStatus {
+  enabled: boolean;
+  user?: AuthUser | null;
+  providers?: string[];
+}
 
 function wsURL(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

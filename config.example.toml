@@ -22,3 +22,27 @@ block_size = 10                         # host ports reserved per VM
 [limits]
 max_concurrent_vms  = 4                 # max simultaneously running VMs
 max_concurrent_jobs = 2                 # max parallel background jobs
+
+[guest]
+vnc_password = "alpine"                 # RFB password for the guest TrollVNC server
+ssh_user     = "root"                   # dropbear SSH user for the web terminal
+ssh_password = "alpine"
+
+# Access control — disabled by default (single-user). See
+# docs/access-control-and-clustering.md. Roles: vphone-admin, vphone-user.
+[auth]
+enabled            = false
+session_ttl        = "12h"
+bootstrap_admin    = "admin"            # created on first start when enabled + no users
+bootstrap_password = ""                 # set once; the account must change it on login
+default_role       = "vphone-user"      # role for external users with no group match
+
+# Map external directory groups to roles (LDAP/OIDC/SAML — added incrementally):
+# [auth.role_map]
+# "vphone-admins" = "vphone-admin"
+# "vphone-users"  = "vphone-user"
+
+# [auth.ldap]
+# enabled = true
+# url = "ldaps://ldap.example.com" ; base_dn = "dc=example,dc=com"
+# bind_dn = "..." ; bind_password = "..." ; user_filter = "(uid=%s)"

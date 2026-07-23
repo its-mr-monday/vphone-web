@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Plus, Server, Activity, HardDrive, ListChecks, Download } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useVMs } from "../hooks/useVM";
+import { useAuth } from "../hooks/useAuth";
 import { useSystemStatus } from "../hooks/useSystem";
 import { useJobs } from "../hooks/useJobs";
 import { VMCard } from "../components/vm/VMCard";
@@ -14,6 +15,7 @@ export function DashboardPage() {
   const { data: vms } = useVMs();
   const { data: sys } = useSystemStatus();
   const { data: jobs } = useJobs();
+  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const [importing, setImporting] = useState(false);
 
@@ -32,14 +34,16 @@ export function DashboardPage() {
             {sys ? `${sys.hostname} · ${sys.os}/${sys.arch} · ${sys.num_cpu} CPUs` : "…"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" icon={<Download className="h-3.5 w-3.5" />} onClick={() => setImporting(true)}>
-            Import
-          </Button>
-          <Button variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => navigate("/create")}>
-            New Device
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" icon={<Download className="h-3.5 w-3.5" />} onClick={() => setImporting(true)}>
+              Import
+            </Button>
+            <Button variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => navigate("/create")}>
+              New Device
+            </Button>
+          </div>
+        )}
       </div>
 
       {importing && (

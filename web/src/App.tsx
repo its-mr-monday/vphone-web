@@ -6,6 +6,9 @@ import { VMPage } from "./pages/VMPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { IPSWPage } from "./pages/IPSWPage";
 import { CreateVMPage } from "./pages/CreateVMPage";
+import { UsersPage } from "./pages/UsersPage";
+import { LoginPage } from "./pages/LoginPage";
+import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,23 +19,45 @@ const queryClient = new QueryClient({
   },
 });
 
+function Shell() {
+  const { loading, enabled, user } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-base font-mono text-sm text-fg-dim">
+        loading…
+      </div>
+    );
+  }
+  if (enabled && !user) {
+    return <LoginPage />;
+  }
+
+  return (
+    <BrowserRouter>
+      <div className="flex h-screen w-screen overflow-hidden bg-base text-fg">
+        <Sidebar />
+        <main className="min-w-0 flex-1 overflow-hidden">
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/create" element={<CreateVMPage />} />
+            <Route path="/vms/:id" element={<VMPage />} />
+            <Route path="/ipsws" element={<IPSWPage />} />
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </main>
+      </div>
+    </BrowserRouter>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <div className="flex h-screen w-screen overflow-hidden bg-base text-fg">
-          <Sidebar />
-          <main className="min-w-0 flex-1 overflow-hidden">
-            <Routes>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/create" element={<CreateVMPage />} />
-              <Route path="/vms/:id" element={<VMPage />} />
-              <Route path="/ipsws" element={<IPSWPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
-          </main>
-        </div>
-      </BrowserRouter>
+      <AuthProvider>
+        <Shell />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

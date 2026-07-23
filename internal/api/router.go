@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/cyberm-tech/vphone-web/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,49 +21,75 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 	r := chi.NewRouter()
 	r.Use(requestLogger(s.log))
 	r.Use(recoverer(s.log))
+	// Resolve the session (if any) into the request context; never rejects.
+	r.Use(s.auth.Middleware)
+
+	// Convenience wrappers so role gating is a no-op when auth is disabled.
+	admin := s.auth.RequireRole(auth.RoleAdmin)
+	user := s.auth.RequireAuth
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Auth endpoints (open — the login flow itself).
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/login", s.login)
+			r.Post("/logout", s.logout)
+			r.Get("/me", s.me)
+			r.Get("/providers", s.providers)
+		})
+
+		// User administration (admin only).
+		r.Group(func(r chi.Router) {
+			r.Use(admin)
+			r.Get("/users", s.listUsers)
+			r.Post("/users", s.createUser)
+			r.Patch("/users/{id}", s.updateUser)
+			r.Delete("/users/{id}", s.deleteUser)
+		})
+
 		r.Route("/vms", func(r chi.Router) {
-			r.Get("/", s.listVMs)
-			r.Post("/", s.createVM)
-			r.Post("/import", s.importVM)
+			// Any authenticated user may view and operate VMs.
+			r.With(user).Get("/", s.listVMs)
+			// Creating/importing VMs is an admin action.
+			r.With(admin).Post("/", s.createVM)
+			r.With(admin).Post("/import", s.importVM)
 			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", s.getVM)
-				r.Delete("/", s.deleteVM)
-				r.Post("/boot", s.bootVM)
-				r.Post("/stop", s.stopVM)
-				r.Post("/restart", s.restartVM)
-				r.Get("/vnc", s.vncWS)
-				r.Get("/terminal", s.terminalWS)
-				r.Post("/screenshot", s.screenshot)
-				r.Post("/touch", s.touch)
-				r.Post("/key", s.key)
-				r.Get("/snapshots", s.listSnapshots)
-				r.Post("/snapshots", s.createSnapshot)
-				r.Post("/snapshots/{name}/restore", s.restoreSnapshot)
-				r.Delete("/snapshots/{name}", s.deleteSnapshot)
+				r.With(user).Get("/", s.getVM)
+				r.With(admin).Delete("/", s.deleteVM)
+				r.With(user).Post("/boot", s.bootVM)
+				r.With(user).Post("/stop", s.stopVM)
+				r.With(user).Post("/restart", s.restartVM)
+				r.With(user).Get("/vnc", s.vncWS)
+				r.With(user).Get("/terminal", s.terminalWS)
+				r.With(user).Post("/screenshot", s.screenshot)
+				r.With(user).Post("/touch", s.touch)
+				r.With(user).Post("/key", s.key)
+				r.With(user).Get("/snapshots", s.listSnapshots)
+				r.With(user).Post("/snapshots", s.createSnapshot)
+				r.With(user).Post("/snapshots/{name}/restore", s.restoreSnapshot)
+				r.With(admin).Delete("/snapshots/{name}", s.deleteSnapshot)
 			})
 		})
 
+		// IPSW library management is admin-only; listing is available to users.
 		r.Route("/ipsws", func(r chi.Router) {
-			r.Get("/", s.listIPSWs)
-			r.Post("/", s.registerIPSW)
-			r.Post("/download", s.downloadIPSW)
-			r.Post("/upload", s.uploadIPSW)
-			r.Delete("/{id}", s.deleteIPSW)
+			r.With(user).Get("/", s.listIPSWs)
+			r.With(admin).Post("/", s.registerIPSW)
+			r.With(admin).Post("/download", s.downloadIPSW)
+			r.With(admin).Post("/upload", s.uploadIPSW)
+			r.With(admin).Delete("/{id}", s.deleteIPSW)
 		})
 
 		r.Route("/jobs", func(r chi.Router) {
-			r.Get("/", s.listJobs)
+			r.With(user).Get("/", s.listJobs)
 			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", s.getJob)
-				r.Post("/cancel", s.cancelJob)
-				r.Get("/logs", s.jobLogsWS)
+				r.With(user).Get("/", s.getJob)
+				r.With(admin).Post("/cancel", s.cancelJob)
+				r.With(user).Get("/logs", s.jobLogsWS)
 			})
 		})
 
-		r.Get("/system/status", s.systemStatusHandler)
-		r.Get("/system/config", s.systemConfigHandler)
+		r.With(user).Get("/system/status", s.systemStatusHandler)
+		r.With(admin).Get("/system/config", s.systemConfigHandler)
 	})
 
 	if s.cfg.Server.DevProxy != "" {

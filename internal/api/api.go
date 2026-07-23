@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cyberm-tech/vphone-web/internal/auth"
 	"github.com/cyberm-tech/vphone-web/internal/config"
 	"github.com/cyberm-tech/vphone-web/internal/ipsw"
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
@@ -20,15 +21,16 @@ type Server struct {
 	vms  *vm.Manager
 	jobs *jobs.Queue
 	ipsw *ipsw.Library
+	auth *auth.Service
 	log  *slog.Logger
 }
 
 // NewServer constructs an API server.
-func NewServer(cfg config.Config, vms *vm.Manager, q *jobs.Queue, lib *ipsw.Library, log *slog.Logger) *Server {
+func NewServer(cfg config.Config, vms *vm.Manager, q *jobs.Queue, lib *ipsw.Library, authSvc *auth.Service, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{cfg: cfg, vms: vms, jobs: q, ipsw: lib, log: log}
+	return &Server{cfg: cfg, vms: vms, jobs: q, ipsw: lib, auth: authSvc, log: log}
 }
 
 // errorResponse is the JSON body returned for API errors.

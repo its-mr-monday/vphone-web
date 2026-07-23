@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/api"
+	"github.com/cyberm-tech/vphone-web/internal/auth"
 	"github.com/cyberm-tech/vphone-web/internal/config"
 	"github.com/cyberm-tech/vphone-web/internal/db"
 	"github.com/cyberm-tech/vphone-web/internal/ipsw"
@@ -90,12 +92,18 @@ func run(configPath, devProxy string, logger *slog.Logger) error {
 	}
 	defer mgr.Shutdown()
 
+	// Access control (disabled by default; see [auth] config).
+	authSvc, err := buildAuth(sqlDB, cfg, logger)
+	if err != nil {
+		return err
+	}
+
 	staticFS, err := web.Dist()
 	if err != nil {
 		return err
 	}
 
-	srv := api.NewServer(cfg, mgr, queue, library, logger)
+	srv := api.NewServer(cfg, mgr, queue, library, authSvc, logger)
 	handler := srv.Router(staticFS)
 
 	addr := netAddr(cfg.Server.Host, cfg.Server.Port)
@@ -135,6 +143,36 @@ func netAddr(host string, port int) string {
 		host = "0.0.0.0"
 	}
 	return host + ":" + strconv.Itoa(port)
+}
+
+// buildAuth constructs the auth service from config and bootstraps the initial
+// admin when auth is enabled and no users exist. External providers (LDAP/OIDC/
+// SAML) are wired in as they are implemented.
+func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Service, error) {
+	ttl := 12 * time.Hour
+	if cfg.Auth.SessionTTL != "" {
+		if d, err := time.ParseDuration(cfg.Auth.SessionTTL); err == nil {
+			ttl = d
+		}
+	}
+	roleMap := make(map[string]auth.Role, len(cfg.Auth.RoleMap))
+	for group, role := range cfg.Auth.RoleMap {
+		roleMap[group] = auth.Role(role)
+	}
+	svc := auth.NewService(sqlDB, auth.Options{
+		Enabled:     cfg.Auth.Enabled,
+		SessionTTL:  ttl,
+		RoleMap:     roleMap,
+		DefaultRole: auth.Role(cfg.Auth.DefaultRole),
+		Logger:      logger,
+	})
+	if err := svc.BootstrapAdmin(cfg.Auth.BootstrapAdmin, cfg.Auth.BootstrapPassword); err != nil {
+		return nil, err
+	}
+	if cfg.Auth.Enabled {
+		logger.Info("access control enabled", "providers", svc.Providers())
+	}
+	return svc, nil
 }
 
 // newLogger builds a text slog logger at the requested level.

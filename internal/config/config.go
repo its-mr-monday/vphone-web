@@ -22,6 +22,50 @@ type Config struct {
 	Ports  PortsConfig  `toml:"ports"`
 	Limits LimitsConfig `toml:"limits"`
 	Guest  GuestConfig  `toml:"guest"`
+	Auth   AuthConfig   `toml:"auth"`
+}
+
+// AuthConfig controls access control. Disabled by default (single-user).
+type AuthConfig struct {
+	Enabled           bool            `toml:"enabled"`
+	SessionTTL        string          `toml:"session_ttl"` // e.g. "12h"
+	BootstrapAdmin    string          `toml:"bootstrap_admin"`
+	BootstrapPassword string          `toml:"bootstrap_password"`
+	DefaultRole       string          `toml:"default_role"` // role for external users w/o group match
+	RoleMap           map[string]string `toml:"role_map"`   // external group -> role
+	// External providers (implemented incrementally; see docs/access-control...).
+	LDAP LDAPConfig `toml:"ldap"`
+	OIDC OIDCConfig `toml:"oidc"`
+	SAML SAMLConfig `toml:"saml"`
+}
+
+// LDAPConfig configures the LDAP provider.
+type LDAPConfig struct {
+	Enabled      bool   `toml:"enabled"`
+	URL          string `toml:"url"`
+	BindDN       string `toml:"bind_dn"`
+	BindPassword string `toml:"bind_password"`
+	BaseDN       string `toml:"base_dn"`
+	UserFilter   string `toml:"user_filter"`  // e.g. (uid=%s)
+	GroupFilter  string `toml:"group_filter"` // e.g. (member=%s)
+}
+
+// OIDCConfig configures the OIDC/OAuth2 provider.
+type OIDCConfig struct {
+	Enabled      bool   `toml:"enabled"`
+	Issuer       string `toml:"issuer"`
+	ClientID     string `toml:"client_id"`
+	ClientSecret string `toml:"client_secret"`
+	RedirectURL  string `toml:"redirect_url"`
+	GroupsClaim  string `toml:"groups_claim"`
+}
+
+// SAMLConfig configures the SAML provider.
+type SAMLConfig struct {
+	Enabled        bool   `toml:"enabled"`
+	IDPMetadataURL string `toml:"idp_metadata_url"`
+	EntityID       string `toml:"entity_id"`
+	ACSURL         string `toml:"acs_url"`
 }
 
 // GuestConfig holds credentials/settings for talking to booted guest VMs.
@@ -91,6 +135,11 @@ func Default() Config {
 			VNCPassword: "alpine",
 			SSHUser:     "root",
 			SSHPassword: "alpine",
+		},
+		Auth: AuthConfig{
+			Enabled:     false,
+			SessionTTL:  "12h",
+			DefaultRole: "vphone-user",
 		},
 	}
 }

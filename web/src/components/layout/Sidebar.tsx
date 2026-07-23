@@ -1,10 +1,12 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload } from "lucide-react";
+import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload, Users, LogOut, ShieldCheck } from "lucide-react";
 import { useVMs } from "../../hooks/useVM";
+import { useAuth } from "../../hooks/useAuth";
 import { StatusDot } from "../ui/StatusDot";
 
 export function Sidebar() {
   const { data: vms, isLoading } = useVMs();
+  const { enabled, user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
 
   return (
@@ -24,6 +26,7 @@ export function Sidebar() {
       <nav className="border-b border-border px-2 py-2">
         <NavItem to="/" icon={<LayoutGrid className="h-4 w-4" />} label="Dashboard" end />
         <NavItem to="/ipsws" icon={<HardDriveDownload className="h-4 w-4" />} label="IPSW Library" />
+        {enabled && isAdmin && <NavItem to="/users" icon={<Users className="h-4 w-4" />} label="Users" />}
         <NavItem to="/settings" icon={<Settings className="h-4 w-4" />} label="Settings" />
       </nav>
 
@@ -32,13 +35,15 @@ export function Sidebar() {
         <span className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">
           Devices {vms ? `(${vms.length})` : ""}
         </span>
-        <button
-          onClick={() => navigate("/create")}
-          className="text-fg-muted transition-colors hover:text-accent"
-          title="Create VM"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => navigate("/create")}
+            className="text-fg-muted transition-colors hover:text-accent"
+            title="Create VM"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -72,6 +77,26 @@ export function Sidebar() {
           </NavLink>
         ))}
       </div>
+
+      {/* Current user + logout (when auth is enabled) */}
+      {enabled && user && (
+        <div className="flex items-center justify-between border-t border-border px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            {user.role === "vphone-admin" ? (
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-accent" />
+            ) : (
+              <Users className="h-3.5 w-3.5 shrink-0 text-fg-dim" />
+            )}
+            <div className="min-w-0 leading-tight">
+              <div className="truncate font-mono text-xs text-fg">{user.username}</div>
+              <div className="truncate font-mono text-[9px] uppercase tracking-wider text-fg-dim">{user.role}</div>
+            </div>
+          </div>
+          <button onClick={() => logout()} className="text-fg-dim transition-colors hover:text-error" title="Sign out">
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
