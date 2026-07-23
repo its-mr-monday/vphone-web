@@ -89,6 +89,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 	}
 
 	vm.SetVNCPassword(cfg.Guest.VNCPassword)
+	vm.SetGuestSSH(cfg.Guest.SSHUser, cfg.Guest.SSHPassword)
 
 	mgr, err := vm.NewManager(sqlDB, vm.Options{
 		VphoneCLIDir:     cfg.Paths.VphoneCLI,

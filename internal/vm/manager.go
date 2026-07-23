@@ -635,6 +635,7 @@ func (m *Manager) startTunnels(v VM, rt *runtime) {
 		{v.Ports.SSH2, 22, "ssh-openssh"},
 		{v.Ports.VNC, 5901, "vnc"},
 		{v.Ports.RPC, 5910, "rpc"},
+		{v.Ports.Frida, 27042, "frida"},
 	}
 
 	rt.mu.Lock()

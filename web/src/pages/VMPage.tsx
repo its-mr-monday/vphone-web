@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams, Link, useSearchParams } from "react-router-dom";
-import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks, Settings } from "lucide-react";
+import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks, Settings, Bug } from "lucide-react";
 import { api } from "../api/client";
 import { useVM } from "../hooks/useVM";
 import { useAuth } from "../hooks/useAuth";
 import { VMSettingsDialog } from "../components/vm/VMSettingsDialog";
+import { VMFrida } from "../components/vm/VMFrida";
 import { useJobs } from "../hooks/useJobs";
 import { VMDisplay } from "../components/vm/VMDisplay";
 import { VMControls } from "../components/vm/VMControls";
@@ -16,7 +17,7 @@ import { JobsPanel } from "../components/jobs/JobsPanel";
 import { StatusDot } from "../components/ui/StatusDot";
 import type { VM } from "../api/client";
 
-type Tab = "display" | "terminal" | "info" | "snapshots" | "jobs";
+type Tab = "display" | "terminal" | "info" | "debug" | "snapshots" | "jobs";
 
 export function VMPage() {
   const { id } = useParams<{ id: string }>();
@@ -84,6 +85,9 @@ export function VMPage() {
         <TabButton active={tab === "info"} onClick={() => setTab("info")} icon={<Info className="h-3.5 w-3.5" />}>
           Info
         </TabButton>
+        <TabButton active={tab === "debug"} onClick={() => setTab("debug")} icon={<Bug className="h-3.5 w-3.5" />}>
+          Debug
+        </TabButton>
         <TabButton active={tab === "snapshots"} onClick={() => setTab("snapshots")} icon={<Camera className="h-3.5 w-3.5" />}>
           Snapshots
         </TabButton>
@@ -104,6 +108,7 @@ export function VMPage() {
         )}
         {tab === "terminal" && <VMTerminal vmId={vm.id} active={running} />}
         {tab === "info" && <InfoPanel vm={vm} />}
+        {tab === "debug" && <VMFrida vm={vm} />}
         {tab === "snapshots" && <VMSnapshots vm={vm} />}
         {tab === "jobs" && <JobsPanel vmId={vm.id} />}
       </div>
@@ -130,6 +135,15 @@ function InfoPanel({ vm }: { vm: VM }) {
   const ipAddress = running
     ? guest?.ip ?? (guest ? "acquiring…" : "waiting for guest…")
     : "—";
+
+  // Frida port is only meaningful once frida-server is running on the guest.
+  const { data: frida } = useQuery({
+    queryKey: ["frida", vm.id],
+    queryFn: () => api.fridaStatus(vm.id),
+    enabled: running,
+    refetchInterval: 5000,
+    retry: false,
+  });
 
   const rows: [string, string][] = [
     ["ID", vm.id],
@@ -158,6 +172,8 @@ function InfoPanel({ vm }: { vm: VM }) {
     ["SSH", vm.ports.ssh],
     ["SSH (alt)", vm.ports.ssh2],
     ["RPC", vm.ports.rpc],
+    // Frida is only listed while frida-server is actually running on the guest.
+    ...(frida?.running ? ([["Frida", vm.ports.frida]] as [string, number][]) : []),
   ];
 
   return (

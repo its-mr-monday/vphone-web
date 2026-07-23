@@ -9,29 +9,32 @@ import (
 // in the database; individual service ports are derived by adding these fixed
 // offsets. Keep these < the configured block size (default 10).
 const (
-	offsetVNC  = 0 // noVNC display  (forwards VM :5901)
-	offsetSSH  = 1 // primary SSH    (forwards VM :22)
-	offsetSSH2 = 2 // secondary SSH  (forwards VM :22222)
-	offsetRPC  = 3 // RPC channel    (forwards VM :5910)
+	offsetVNC   = 0 // noVNC display  (forwards VM :5901)
+	offsetSSH   = 1 // primary SSH    (forwards VM :22)
+	offsetSSH2  = 2 // secondary SSH  (forwards VM :22222)
+	offsetRPC   = 3 // RPC channel    (forwards VM :5910)
+	offsetFrida = 4 // Frida server   (forwards VM :27042)
 )
 
 // PortBlock describes the concrete host ports assigned to a single VM.
 type PortBlock struct {
-	Base int `json:"base"`
-	VNC  int `json:"vnc"`
-	SSH  int `json:"ssh"`
-	SSH2 int `json:"ssh2"`
-	RPC  int `json:"rpc"`
+	Base  int `json:"base"`
+	VNC   int `json:"vnc"`
+	SSH   int `json:"ssh"`
+	SSH2  int `json:"ssh2"`
+	RPC   int `json:"rpc"`
+	Frida int `json:"frida"`
 }
 
 // blockFor derives the service ports for a given block base.
 func blockFor(base int) PortBlock {
 	return PortBlock{
-		Base: base,
-		VNC:  base + offsetVNC,
-		SSH:  base + offsetSSH,
-		SSH2: base + offsetSSH2,
-		RPC:  base + offsetRPC,
+		Base:  base,
+		VNC:   base + offsetVNC,
+		SSH:   base + offsetSSH,
+		SSH2:  base + offsetSSH2,
+		RPC:   base + offsetRPC,
+		Frida: base + offsetFrida,
 	}
 }
 

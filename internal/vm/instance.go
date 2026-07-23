@@ -61,6 +61,23 @@ func SetVNCPassword(pw string) {
 	}
 }
 
+// Guest SSH credentials, used by server-side helpers (e.g. Frida management)
+// that shell into the guest. Defaults match vphone CFW; overridable via config.
+var (
+	guestSSHUser     = "root"
+	guestSSHPassword = "alpine"
+)
+
+// SetGuestSSH sets the credentials used for server-side SSH into guests.
+func SetGuestSSH(user, password string) {
+	if user != "" {
+		guestSSHUser = user
+	}
+	if password != "" {
+		guestSSHPassword = password
+	}
+}
+
 // VM is the persisted representation of a virtual iPhone. It is the shape
 // returned by the API and stored in the database.
 type VM struct {

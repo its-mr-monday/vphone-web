@@ -20,6 +20,7 @@ export interface PortBlock {
   ssh: number;
   ssh2: number;
   rpc: number;
+  frida: number;
 }
 
 export interface VM {
@@ -54,6 +55,21 @@ export interface GuestInfo {
   ip?: string;
   ios?: string;
   name?: string;
+}
+
+/** Guest frida-server state. */
+export interface FridaStatus {
+  installed: boolean;
+  running: boolean;
+  version?: string;
+  port: number;
+}
+
+/** One entry from frida-ps (a running application on the guest). */
+export interface FridaProcess {
+  pid: number;
+  name: string;
+  identifier?: string;
 }
 
 export interface CreateVMRequest {
@@ -220,6 +236,13 @@ export const api = {
     request<{ ok: boolean }>(`/vms/${id}/key`, { method: "POST", body: JSON.stringify({ key }) }),
   screenshotURL: (id: string) => `/api/v1/vms/${id}/screenshot`,
   guestInfo: (id: string) => request<GuestInfo>(`/vms/${id}/info`),
+
+  // Frida (dynamic instrumentation)
+  fridaStatus: (id: string) => request<FridaStatus>(`/vms/${id}/frida`),
+  fridaInstall: (id: string) => request<{ job_id: string }>(`/vms/${id}/frida/install`, { method: "POST" }),
+  fridaStart: (id: string) => request<FridaStatus>(`/vms/${id}/frida/start`, { method: "POST" }),
+  fridaStop: (id: string) => request<FridaStatus>(`/vms/${id}/frida/stop`, { method: "POST" }),
+  fridaProcesses: (id: string) => request<FridaProcess[]>(`/vms/${id}/frida/processes`),
 
   // Jobs
   listJobs: (vmID?: string, limit = 100) =>

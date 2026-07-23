@@ -34,6 +34,10 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
   (`golang.org/x/crypto/ssh`), with window-resize support and auto-reconnect.
 - **Hardware controls** — Home / Lock / Volume via `vphone.sock`, plus screenshot
   capture and download (full-resolution PNG).
+- **Frida / debugging** — a Debug tab manages the guest's `frida-server` (install
+  from the Frida APT repo as a streamed job, start/stop, version/status) and
+  enumerates running applications live via the host `frida-ps` over a forwarded
+  frida port — the foundation for dynamic instrumentation.
 - **Editable config** — while a VM is stopped, tweak its name, CPU, memory, and
   network (mode + bridge interface) from the Info panel's gear; changes are
   written back into the VM's `config.plist` for the next boot. The gear is
