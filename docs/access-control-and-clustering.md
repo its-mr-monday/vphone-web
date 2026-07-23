@@ -1,9 +1,14 @@
 # Access Control & Clustering — Design
 
-This document describes the architecture for two upcoming phases of vphone-web:
+> **Status: implemented.** This is the original design/architecture record. For
+> how to *use* these features, see the user guides:
+> [Access control](08-access-control.md) and [Clustering](07-clustering.md).
+> (Local + LDAP + OIDC + SAML auth and the health-monitored node registry with
+> HTTPS + trust-on-first-use cert pinning are all shipped.)
+
+This document describes the architecture for two phases of vphone-web:
 **access control** (authentication, roles, permissions) and **clustering** (one
-control-plane UI managing a fleet of macOS hosts). Phase 1 (auth) is being
-implemented now; clustering is designed here and built after auth lands.
+control-plane UI managing a fleet of macOS hosts).
 
 ---
 
