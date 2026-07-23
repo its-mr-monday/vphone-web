@@ -10,6 +10,7 @@ import { UsersPage } from "./pages/UsersPage";
 import { NodesPage } from "./pages/NodesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+import { ThemeProvider } from "./hooks/useTheme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,10 +57,12 @@ function Shell() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Shell />
-      </AuthProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <Shell />
+        </AuthProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

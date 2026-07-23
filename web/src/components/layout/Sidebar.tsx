@@ -1,25 +1,37 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload, Users, LogOut, ShieldCheck, Server } from "lucide-react";
+import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload, Users, LogOut, ShieldCheck, Server, Sun, Moon } from "lucide-react";
 import { useVMs } from "../../hooks/useVM";
 import { useAuth } from "../../hooks/useAuth";
+import { useTheme } from "../../hooks/useTheme";
 import { StatusDot } from "../ui/StatusDot";
 
 export function Sidebar() {
   const { data: vms, isLoading } = useVMs();
   const { enabled, user, isAdmin, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   const navigate = useNavigate();
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-surface">
       {/* Brand */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <Smartphone className="h-5 w-5 text-accent" />
-        <div className="leading-tight">
-          <div className="font-mono text-sm font-semibold text-fg">vphone</div>
-          <div className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">
-            web console
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Smartphone className="h-5 w-5 text-accent" />
+          <div className="leading-tight">
+            <div className="font-mono text-sm font-semibold text-fg">vphone</div>
+            <div className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+              web console
+            </div>
           </div>
         </div>
+        <button
+          onClick={toggle}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          aria-label="Toggle theme"
+          className="rounded-sm border border-border p-1.5 text-fg-dim transition-colors hover:border-border-bright hover:text-accent"
+        >
+          {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+        </button>
       </div>
 
       {/* Nav */}

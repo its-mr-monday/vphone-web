@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Smartphone, LogIn, KeyRound } from "lucide-react";
+import { Smartphone, LogIn, KeyRound, Sun, Moon } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../hooks/useAuth";
+import { useTheme } from "../hooks/useTheme";
 import { Button } from "../components/ui/Button";
 
 /**
@@ -12,6 +13,7 @@ import { Button } from "../components/ui/Button";
  */
 export function LoginPage() {
   const { refresh } = useAuth();
+  const { theme, toggle } = useTheme();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +39,15 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-base">
+    <div className="relative flex h-screen w-screen items-center justify-center bg-base">
+      <button
+        onClick={toggle}
+        title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        aria-label="Toggle theme"
+        className="absolute right-4 top-4 rounded-sm border border-border p-1.5 text-fg-dim transition-colors hover:border-border-bright hover:text-accent"
+      >
+        {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      </button>
       <form onSubmit={submit} className="w-[360px] rounded-md border border-border bg-surface p-6 shadow-2xl">
         <div className="mb-6 flex items-center gap-2">
           <Smartphone className="h-6 w-6 text-accent" />

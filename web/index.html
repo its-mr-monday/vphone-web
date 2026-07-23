@@ -1,11 +1,22 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>vphone-web</title>
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Apply the saved theme before paint to avoid a flash (defaults to dark). -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("vphone-theme");
+          document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

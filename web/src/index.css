@@ -31,6 +31,30 @@
   color-scheme: dark;
 }
 
+/* Light theme — overrides the @theme (dark) tokens when data-theme="light" is
+   set on <html>. Tailwind v4 utilities reference these via var(), so overriding
+   the variables re-themes the whole app. Status accents are deepened for
+   contrast on light surfaces. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-base: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef0f2;
+  --color-elevated: #e6e8ec;
+  --color-border: #d7d9de;
+  --color-border-bright: #c2c5cc;
+
+  --color-fg: #18181b;
+  --color-fg-muted: #52525b;
+  --color-fg-dim: #8b8d96;
+
+  --color-accent: #0891b2;
+  --color-warn: #b45309;
+  --color-error: #dc2626;
+  --color-success: #059669;
+}
+
 html,
 body,
 #root {
