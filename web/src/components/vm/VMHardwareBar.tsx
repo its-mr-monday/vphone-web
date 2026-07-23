@@ -27,9 +27,19 @@ export function VMHardwareBar({ vmId, disabled }: { vmId: string; disabled: bool
     setError(null);
     setBusy("screenshot");
     try {
-      const res = await fetch(api.screenshotURL(vmId), { method: "POST" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "capture failed");
-      const blob = await res.blob();
+      // Prefer capturing the live noVNC canvas: it's the real guest framebuffer
+      // and it works for headless VMs (which have no host capture view). Fall back
+      // to the server-side capture only if the canvas isn't available.
+      let blob: Blob | null = null;
+      const canvas = document.querySelector<HTMLCanvasElement>("[data-vm-display] canvas");
+      if (canvas && canvas.width > 0 && canvas.height > 0) {
+        blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      }
+      if (!blob) {
+        const res = await fetch(api.screenshotURL(vmId), { method: "POST" });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "capture failed");
+        blob = await res.blob();
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

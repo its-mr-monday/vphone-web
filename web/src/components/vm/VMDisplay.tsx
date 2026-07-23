@@ -171,7 +171,7 @@ export function VMDisplay({ vm }: { vm: VM }) {
       )}
 
       <DeviceFrame running={running} scale={scale}>
-        <div ref={screenRef} className="h-full w-full" />
+        <div ref={screenRef} data-vm-display className="h-full w-full" />
 
         {/* Socket-touch overlay (only when that mode is enabled). */}
         {running && socketTouch && (
