@@ -7,10 +7,10 @@ import { useCreateVM } from "../hooks/useVM";
 import { Button } from "../components/ui/Button";
 
 const VARIANTS: { value: Variant; label: string; desc: string }[] = [
-  { value: "regular", label: "Regular", desc: "52 patches · stock behavior with VM boot chain" },
-  { value: "dev", label: "Development", desc: "66 patches · TXM entitlement/debug bypasses + rpcserver" },
-  { value: "jb", label: "Jailbreak", desc: "127 patches · full bypass, Sileo + TrollStore on first boot" },
-  { value: "exp", label: "Experimental", desc: "141 patches · JB superset + anti-VM research patches" },
+  { value: "regular", label: "Regular", desc: "stock behavior with the VM boot chain" },
+  { value: "dev", label: "Development", desc: "+ TXM entitlement/debug bypasses + rpcserver" },
+  { value: "jb", label: "Jailbreak", desc: "full bypass · Sileo + apt + TrollStore on first boot" },
+  { value: "exp", label: "Experimental", desc: "JB superset + anti-VM-detection research patches" },
 ];
 
 export function CreateVMPage() {

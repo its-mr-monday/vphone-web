@@ -330,8 +330,17 @@ func (l *Library) autodetect(it *IPSW) {
 			it.Version = fieldValue(line)
 		case it.Build == "" && strings.HasPrefix(line, "BuildVersion"):
 			it.Build = fieldValue(line)
-		case it.Device == "" && strings.HasPrefix(line, "Device"):
-			it.Device = fieldValue(line)
+		case it.Device == "" && strings.HasPrefix(line, ">"):
+			// `ipsw info` lists devices under a "Devices" header as e.g.
+			//   > iPhone17,3_D47AP_23B85
+			// Extract the leading device identifier (iPhone17,3).
+			id := strings.TrimSpace(strings.TrimPrefix(line, ">"))
+			if i := strings.Index(id, "_"); i > 0 {
+				id = id[:i]
+			}
+			if strings.Contains(id, ",") { // looks like a device identifier
+				it.Device = id
+			}
 		}
 	}
 }
