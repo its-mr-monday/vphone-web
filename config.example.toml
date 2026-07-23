@@ -8,6 +8,7 @@
 host = "0.0.0.0"
 port = 8080
 # dev_proxy = "http://localhost:5173"   # set by `make dev`; leave empty in prod
+headless_vms = false                    # boot VMs with no host window (web/VNC only)
 
 [paths]
 vphone_cli = "./vphone-cli"             # path to the vphone-cli submodule

@@ -28,6 +28,8 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
   control. Native RFB input (mouse **+ keyboard**) plus an optional socket-touch
   mode that injects precise taps/swipes through `vphone.sock`. noVNC authenticates
   to the guest TrollVNC server automatically.
+- **Headless VMs** — boot with no host window (`headless_vms`); the guest VNC,
+  SSH, and control socket all work off-screen, so the web console is the only display.
 - **SSH terminal** — xterm.js backed by a real server-side SSH client + PTY
   (`golang.org/x/crypto/ssh`), with window-resize support and auto-reconnect.
 - **Hardware controls** — Home / Lock / Volume via `vphone.sock`, plus screenshot

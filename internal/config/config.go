@@ -95,6 +95,8 @@ type ServerConfig struct {
 	// "http://localhost:5173"). Unknown (non-API) routes are reverse-proxied there.
 	// Empty in production, where the embedded frontend is served instead.
 	DevProxy string `toml:"dev_proxy"`
+	// HeadlessVMs boots VMs without a host window (web console / VNC only).
+	HeadlessVMs bool `toml:"headless_vms"`
 }
 
 // PathsConfig holds filesystem locations.
@@ -233,6 +235,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("VPHONE_WEB_DEV_PROXY"); v != "" {
 		c.Server.DevProxy = v
+	}
+	if v := os.Getenv("VPHONE_WEB_HEADLESS"); v == "1" || v == "true" {
+		c.Server.HeadlessVMs = true
 	}
 	if v := os.Getenv("VPHONE_WEB_VPHONE_CLI"); v != "" {
 		c.Paths.VphoneCLI = v

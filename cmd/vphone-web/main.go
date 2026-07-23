@@ -96,6 +96,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		PortBase:         cfg.Ports.Base,
 		PortBlockSize:    cfg.Ports.BlockSize,
 		MaxConcurrentVMs: cfg.Limits.MaxConcurrentVMs,
+		HeadlessVMs:      cfg.Server.HeadlessVMs,
 		Jobs:             queue,
 		IPSWPath:         library.PathOf,
 		Logger:           logger,

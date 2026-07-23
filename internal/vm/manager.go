@@ -28,6 +28,7 @@ type Options struct {
 	PortBase         int
 	PortBlockSize    int
 	MaxConcurrentVMs int
+	HeadlessVMs      bool // boot VMs without a host window (web/VNC only)
 	Jobs             *jobs.Queue
 	// IPSWPath resolves an IPSW id to its file path on disk. Provided by the
 	// ipsw library; may be nil if provisioning is disabled.
@@ -435,7 +436,11 @@ func (m *Manager) realBoot(v VM) error {
 
 	rt := &runtime{tail: newRingLog(200)}
 
-	cmd := exec.Command("make", "boot", "VM_DIR="+v.VMDir)
+	bootArgs := []string{"boot", "VM_DIR=" + v.VMDir}
+	if m.opts.HeadlessVMs {
+		bootArgs = append(bootArgs, "HEADLESS=1")
+	}
+	cmd := exec.Command("make", bootArgs...)
 	cmd.Dir = m.opts.VphoneCLIDir
 	cmd.Env = m.makeEnv(nil)
 	cmd.Stdout = rt.tail
