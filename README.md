@@ -66,8 +66,9 @@ enumeration via `frida-ps`:
 - **Networking** — per-VM NAT (shared) or **bridged** (the VM joins the physical
   LAN with its own DHCP lease, so peers can SSH it directly). The create wizard
   picks the host bridge interface and flags Wi-Fi (bridging needs a wired NIC).
-- **Access control** — optional users/roles (`vphone-admin` / `vphone-user`) with
-  local + LDAP/OIDC/SAML providers; disabled by default.
+- **Access control** — optional users/roles (`vphone-admin` / `vphone-user`),
+  disabled by default. Local bcrypt accounts + **LDAP/AD** (search-then-bind),
+  **OIDC/OAuth2** and **SAML 2.0** SSO; directory groups map to roles.
 - **Clustering** — a controller manages worker nodes (`vphone-web --agent`),
   registered by address + system password and health-monitored (ONLINE/OFFLINE).
 - **Snapshots** — create / restore / delete backups (`vm_backup` / `vm_switch`),

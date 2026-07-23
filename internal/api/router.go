@@ -35,6 +35,15 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.Post("/logout", s.logout)
 			r.Get("/me", s.me)
 			r.Get("/providers", s.providers)
+			// Redirect-based SSO flows (registered only when configured).
+			if s.oidc != nil {
+				r.Get("/oidc/login", s.oidcLogin)
+				r.Get("/oidc/callback", s.oidcCallback)
+			}
+			if s.saml != nil {
+				r.Get("/saml/login", s.samlLogin)
+				r.Post("/saml/acs", s.samlACS)
+			}
 		})
 
 		// Agent control surface — authenticated by the cluster system password,

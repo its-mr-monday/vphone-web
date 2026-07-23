@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { Smartphone, LogIn } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Smartphone, LogIn, KeyRound } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../hooks/useAuth";
 import { Button } from "../components/ui/Button";
 
 /**
  * LoginPage is shown when access control is enabled and no user is signed in.
- * It performs local username/password login; external providers (OIDC/SAML) will
- * add redirect buttons here as they land.
+ * It performs local/LDAP username+password login and offers redirect buttons for
+ * any configured SSO providers (OIDC / SAML).
  */
 export function LoginPage() {
   const { refresh } = useAuth();
@@ -15,6 +16,11 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const { data: providers } = useQuery({ queryKey: ["auth-providers"], queryFn: api.authProviders });
+  const sso = providers?.sso ?? [];
+  // Surface an SSO error passed back on the redirect.
+  const ssoError = new URLSearchParams(window.location.search).get("sso_error");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,15 +56,41 @@ export function LoginPage() {
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="login-input" />
         </label>
 
-        {error && (
+        {(error || ssoError) && (
           <div className="mb-3 rounded-sm border border-error/40 bg-error/10 px-3 py-2 font-mono text-xs text-error">
-            {error}
+            {error || ssoError}
           </div>
         )}
 
         <Button type="submit" variant="primary" icon={<LogIn className="h-3.5 w-3.5" />} disabled={busy || !username || !password} className="w-full justify-center">
           {busy ? "Signing in…" : "Sign in"}
         </Button>
+
+        {sso.length > 0 && (
+          <>
+            <div className="my-4 flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">or</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <div className="flex flex-col gap-2">
+              {sso.map((p) => (
+                <Button
+                  key={p.name}
+                  type="button"
+                  variant="ghost"
+                  icon={<KeyRound className="h-3.5 w-3.5" />}
+                  className="w-full justify-center"
+                  onClick={() => {
+                    window.location.href = p.login_url;
+                  }}
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </div>
+          </>
+        )}
 
         <style>{`
           .login-input { width:100%; background:var(--color-base); border:1px solid var(--color-border); border-radius:2px; padding:0.5rem 0.7rem; font-family:var(--font-mono); font-size:0.8rem; color:var(--color-fg); outline:none; }

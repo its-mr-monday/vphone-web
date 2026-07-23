@@ -9,11 +9,31 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// ssoProvider is a redirect-based login option shown on the login page.
+type ssoProvider struct {
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	LoginURL string `json:"login_url"`
+}
+
 // authStatus is the GET /api/v1/auth/me and /providers response.
 type authStatus struct {
-	Enabled   bool        `json:"enabled"`
-	User      *auth.User  `json:"user,omitempty"`
-	Providers []string    `json:"providers,omitempty"`
+	Enabled   bool          `json:"enabled"`
+	User      *auth.User    `json:"user,omitempty"`
+	Providers []string      `json:"providers,omitempty"`
+	SSO       []ssoProvider `json:"sso,omitempty"`
+}
+
+// ssoProviders lists the configured redirect-based login options.
+func (s *Server) ssoProviders() []ssoProvider {
+	var out []ssoProvider
+	if s.oidc != nil {
+		out = append(out, ssoProvider{Name: "oidc", Label: "Single Sign-On (OIDC)", LoginURL: "/api/v1/auth/oidc/login"})
+	}
+	if s.saml != nil {
+		out = append(out, ssoProvider{Name: "saml", Label: "Single Sign-On (SAML)", LoginURL: "/api/v1/auth/saml/login"})
+	}
+	return out
 }
 
 // me handles GET /api/v1/auth/me — current user (200) or unauthenticated (200 with user null when disabled, 401 when enabled+no session).
@@ -32,7 +52,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 // providers handles GET /api/v1/auth/providers — for the login page.
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, authStatus{Enabled: s.auth.Enabled(), Providers: s.auth.Providers()})
+	writeJSON(w, http.StatusOK, authStatus{
+		Enabled:   s.auth.Enabled(),
+		Providers: s.auth.Providers(),
+		SSO:       s.ssoProviders(),
+	})
 }
 
 type loginRequest struct {

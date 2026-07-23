@@ -108,7 +108,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 	defer mgr.Shutdown()
 
 	// Access control (disabled by default; see [auth] config).
-	authSvc, err := buildAuth(sqlDB, cfg, logger)
+	authSvc, oidcProv, samlProv, err := buildAuth(sqlDB, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -139,6 +139,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 
 	srv := api.NewServer(cfg, api.Deps{
 		VMs: mgr, Jobs: queue, IPSW: library, Auth: authSvc,
+		OIDC: oidcProv, SAML: samlProv,
 		Cluster: clusterMgr, Version: version, Log: logger,
 	})
 	handler := srv.Router(staticFS)
@@ -229,7 +230,7 @@ func lanAddrs() []string {
 // buildAuth constructs the auth service from config and bootstraps the initial
 // admin when auth is enabled and no users exist. External providers (LDAP/OIDC/
 // SAML) are wired in as they are implemented.
-func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Service, error) {
+func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Service, *auth.OIDCProvider, *auth.SAMLProvider, error) {
 	ttl := 12 * time.Hour
 	if cfg.Auth.SessionTTL != "" {
 		if d, err := time.ParseDuration(cfg.Auth.SessionTTL); err == nil {
@@ -255,10 +256,42 @@ func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Ser
 			Insecure:     cfg.Auth.LDAP.Insecure,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("ldap provider: %w", err)
+			return nil, nil, nil, fmt.Errorf("ldap provider: %w", err)
 		}
 		providers = append(providers, ldapProv)
 		logger.Info("LDAP auth provider enabled", "url", cfg.Auth.LDAP.URL)
+	}
+
+	// OIDC and SAML are redirect flows handled by the API layer, not password
+	// Authenticators — construct them separately and hand them to the server.
+	var oidcProv *auth.OIDCProvider
+	if cfg.Auth.OIDC.Enabled {
+		p, err := auth.NewOIDC(context.Background(), auth.OIDCOptions{
+			Issuer:       cfg.Auth.OIDC.Issuer,
+			ClientID:     cfg.Auth.OIDC.ClientID,
+			ClientSecret: cfg.Auth.OIDC.ClientSecret,
+			RedirectURL:  cfg.Auth.OIDC.RedirectURL,
+			GroupsClaim:  cfg.Auth.OIDC.GroupsClaim,
+		})
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("oidc provider: %w", err)
+		}
+		oidcProv = p
+		logger.Info("OIDC auth provider enabled", "issuer", cfg.Auth.OIDC.Issuer)
+	}
+
+	var samlProv *auth.SAMLProvider
+	if cfg.Auth.SAML.Enabled {
+		p, err := auth.NewSAML(context.Background(), auth.SAMLOptions{
+			IDPMetadataURL: cfg.Auth.SAML.IDPMetadataURL,
+			EntityID:       cfg.Auth.SAML.EntityID,
+			ACSURL:         cfg.Auth.SAML.ACSURL,
+		})
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("saml provider: %w", err)
+		}
+		samlProv = p
+		logger.Info("SAML auth provider enabled", "idp_metadata", cfg.Auth.SAML.IDPMetadataURL)
 	}
 
 	svc := auth.NewService(sqlDB, auth.Options{
@@ -270,12 +303,12 @@ func buildAuth(sqlDB *sql.DB, cfg config.Config, logger *slog.Logger) (*auth.Ser
 		Logger:      logger,
 	})
 	if err := svc.BootstrapAdmin(cfg.Auth.BootstrapAdmin, cfg.Auth.BootstrapPassword); err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if cfg.Auth.Enabled {
 		logger.Info("access control enabled", "providers", svc.Providers())
 	}
-	return svc, nil
+	return svc, oidcProv, samlProv, nil
 }
 
 // newLogger builds a text slog logger at the requested level.

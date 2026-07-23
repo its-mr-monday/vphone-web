@@ -318,10 +318,17 @@ export interface AuthUser {
   updated_at: string;
 }
 
+export interface SSOProvider {
+  name: string;
+  label: string;
+  login_url: string;
+}
+
 export interface AuthStatus {
   enabled: boolean;
   user?: AuthUser | null;
   providers?: string[];
+  sso?: SSOProvider[];
 }
 
 export type NodeStatus = "ONLINE" | "OFFLINE" | "UNKNOWN";
