@@ -45,6 +45,10 @@ export interface VM {
   screen_width: number;
   screen_height: number;
   vnc_password: string;
+  // Cluster annotation (unified list): "" = local host, else a worker node.
+  node_id?: string;
+  node_name?: string;
+  node_address?: string;
 }
 
 export type NetworkMode = "nat" | "bridged" | "hostOnly" | "none";
@@ -82,6 +86,8 @@ export interface CreateVMRequest {
   cpu?: number;
   memory?: number;
   disk_size?: number;
+  // Target a worker node for the build; omit / "local" builds on this host.
+  node_id?: string;
 }
 
 export interface HostInterface {

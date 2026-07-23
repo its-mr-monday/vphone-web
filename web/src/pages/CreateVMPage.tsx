@@ -29,7 +29,10 @@ export function CreateVMPage() {
   const [network, setNetwork] = useState<NetworkMode>("nat");
   const [iface, setIface] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [nodeId, setNodeId] = useState(""); // "" = this host
   const { data: interfaces } = useQuery({ queryKey: ["interfaces"], queryFn: api.systemInterfaces });
+  const { data: nodes } = useQuery({ queryKey: ["nodes"], queryFn: api.listNodes });
+  const onlineNodes = (nodes ?? []).filter((n) => n.status === "ONLINE");
 
   const ready = (ipsws ?? []).filter((i) => i.status === "READY" || i.status === "REGISTERED");
   const selectedIpsw = ready.find((i) => i.id === ipswId);
@@ -49,7 +52,10 @@ export function CreateVMPage() {
         cpu,
         memory,
         disk_size: disk,
+        node_id: nodeId || undefined,
       });
+      // Remote builds are proxied; the returned id lives on that node but the
+      // controller routes to it transparently.
       navigate(`/vms/${vm.id}?tab=jobs`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "failed to create VM");
@@ -231,8 +237,27 @@ export function CreateVMPage() {
 
           {step === 3 && (
             <Section title="Confirm">
+              {onlineNodes.length > 0 && (
+                <div className="mb-4">
+                  <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                    Deploy to
+                  </span>
+                  <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} className="wiz-input">
+                    <option value="">This host (controller)</option>
+                    {onlineNodes.map((n) => (
+                      <option key={n.id} value={n.id}>{n.name} · {n.address}</option>
+                    ))}
+                  </select>
+                  {nodeId && selectedIpsw && (
+                    <p className="mt-1 font-mono text-[10px] text-warn">
+                      The selected firmware must already be in the target node's IPSW library.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="rounded-md border border-border bg-surface p-4">
                 <Row k="Name" v={name || "—"} />
+                <Row k="Deploy to" v={nodeId ? (onlineNodes.find((n) => n.id === nodeId)?.name ?? nodeId) : "This host"} />
                 <Row k="Firmware" v={selectedIpsw ? `${selectedIpsw.version} (${selectedIpsw.build})` : "none (bare)"} />
                 <Row k="Variant" v={VARIANTS.find((v) => v.value === variant)!.label} />
                 <Row k="Network" v={network === "bridged" ? "Bridged (LAN)" : "NAT (shared)"} />

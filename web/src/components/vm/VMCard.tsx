@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Cpu, HardDrive, MemoryStick } from "lucide-react";
+import { Cpu, HardDrive, MemoryStick, Server } from "lucide-react";
 import type { VM } from "../../api/client";
 import { StatusDot } from "../ui/StatusDot";
 
@@ -18,6 +18,11 @@ export function VMCard({ vm }: { vm: VM }) {
           <div className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">
             {vm.variant} · {vm.ios_version || "no firmware"}
           </div>
+          {vm.node_id ? (
+            <div className="mt-1 inline-flex items-center gap-1 rounded-sm border border-accent/30 bg-accent/5 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-accent">
+              <Server className="h-2.5 w-2.5" /> {vm.node_name}
+            </div>
+          ) : null}
         </div>
         <StatusDot status={vm.status} showLabel />
       </div>
