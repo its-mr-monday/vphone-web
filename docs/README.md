@@ -20,6 +20,7 @@ everything from first run to running a cluster of hosts.
 9. [API reference](09-api-reference.md) — REST + WebSocket endpoints
 10. [Troubleshooting](10-troubleshooting.md) — common issues and fixes
 11. [Finding firmware](11-finding-firmware.md) — where to get iPhone IPSWs + CloudOS/PCC images
+12. [Deployment](12-deployment.md) — running the server durably (start script + fleet LaunchAgent) and headless VMs
 
 ## The 60-second version
 

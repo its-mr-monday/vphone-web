@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  vphone-web LaunchAgent template (fleet / Mac-mini-as-server auto-start).
+
+  This is a per-user AGENT (not a system LaunchDaemon) on purpose: VMs render a
+  host window (Virtualization.framework needs an Aqua GUI session), so the server
+  must run inside the logged-in user's graphical session. On a headless Mac mini
+  server, enable automatic login for the operator account so that session exists
+  at boot.
+
+  Install:
+    1. Replace __USER__ and __REPO_ROOT__ below.
+    2. cp deploy/com.cyberm.vphone-web.plist.template \
+         ~/Library/LaunchAgents/com.cyberm.vphone-web.plist
+    3. launchctl load -w ~/Library/LaunchAgents/com.cyberm.vphone-web.plist
+
+  See docs/12-deployment.md for the full walkthrough (incl. amfidont prereq).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cyberm.vphone-web</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_ROOT__/scripts/serve.sh</string>
+    </array>
+
+    <!-- Start at login and keep it up if it crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Give tunnels/aria2c/etc. a normal PATH incl. Homebrew. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/__USER__/.vphone-web/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/__USER__/.vphone-web/server.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
