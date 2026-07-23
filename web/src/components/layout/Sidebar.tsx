@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload, Users, LogOut, ShieldCheck } from "lucide-react";
+import { LayoutGrid, Plus, Smartphone, Settings, HardDriveDownload, Users, LogOut, ShieldCheck, Server } from "lucide-react";
 import { useVMs } from "../../hooks/useVM";
 import { useAuth } from "../../hooks/useAuth";
 import { StatusDot } from "../ui/StatusDot";
@@ -26,6 +26,7 @@ export function Sidebar() {
       <nav className="border-b border-border px-2 py-2">
         <NavItem to="/" icon={<LayoutGrid className="h-4 w-4" />} label="Dashboard" end />
         <NavItem to="/ipsws" icon={<HardDriveDownload className="h-4 w-4" />} label="IPSW Library" />
+        {isAdmin && <NavItem to="/nodes" icon={<Server className="h-4 w-4" />} label="Cluster Nodes" />}
         {enabled && isAdmin && <NavItem to="/users" icon={<Users className="h-4 w-4" />} label="Users" />}
         <NavItem to="/settings" icon={<Settings className="h-4 w-4" />} label="Settings" />
       </nav>

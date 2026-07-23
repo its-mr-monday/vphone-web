@@ -23,3 +23,6 @@
 
 # TS build cache
 /web/*.tsbuildinfo
+
+# Local env (secrets)
+.env

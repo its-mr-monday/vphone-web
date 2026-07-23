@@ -20,9 +20,19 @@ type Config struct {
 	Server ServerConfig `toml:"server"`
 	Paths  PathsConfig  `toml:"paths"`
 	Ports  PortsConfig  `toml:"ports"`
-	Limits LimitsConfig `toml:"limits"`
-	Guest  GuestConfig  `toml:"guest"`
-	Auth   AuthConfig   `toml:"auth"`
+	Limits  LimitsConfig  `toml:"limits"`
+	Guest   GuestConfig   `toml:"guest"`
+	Auth    AuthConfig    `toml:"auth"`
+	Cluster ClusterConfig `toml:"cluster"`
+}
+
+// ClusterConfig controls the clustering control link. The system password is the
+// shared secret between a controller and its worker agents; set it via
+// VPHONE_SYSTEM_PASSWORD, an .env file, or here.
+type ClusterConfig struct {
+	SystemPassword string `toml:"system_password"`
+	// HeartbeatInterval controls how often the controller polls node health.
+	HeartbeatInterval string `toml:"heartbeat_interval"`
 }
 
 // AuthConfig controls access control. Disabled by default (single-user).
@@ -144,6 +154,37 @@ func Default() Config {
 	}
 }
 
+// LoadDotEnv reads a simple KEY=VALUE .env file (if present) and sets any keys
+// that are not already in the environment. Lines starting with # are comments;
+// surrounding quotes on values are stripped. Missing file is not an error.
+func LoadDotEnv(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		v = strings.Trim(v, `"'`)
+		if _, exists := os.LookupEnv(k); !exists {
+			_ = os.Setenv(k, v)
+		}
+	}
+	return nil
+}
+
 // DefaultPath returns the default config file location.
 func DefaultPath() string {
 	home, err := os.UserHomeDir()
@@ -204,6 +245,10 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("VPHONE_WEB_DATA_DIR"); v != "" {
 		c.Paths.DataDir = v
+	}
+	// The cluster system password is conventionally set via env / .env.
+	if v := os.Getenv("VPHONE_SYSTEM_PASSWORD"); v != "" {
+		c.Cluster.SystemPassword = v
 	}
 }
 

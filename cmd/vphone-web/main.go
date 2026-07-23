@@ -8,7 +8,9 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/cyberm-tech/vphone-web/internal/api"
 	"github.com/cyberm-tech/vphone-web/internal/auth"
+	"github.com/cyberm-tech/vphone-web/internal/cluster"
 	"github.com/cyberm-tech/vphone-web/internal/config"
 	"github.com/cyberm-tech/vphone-web/internal/db"
 	"github.com/cyberm-tech/vphone-web/internal/ipsw"
@@ -26,22 +29,32 @@ import (
 	"github.com/cyberm-tech/vphone-web/web"
 )
 
+// version is the reported build version (override via -ldflags).
+var version = "1.0"
+
 func main() {
 	configPath := flag.String("config", config.DefaultPath(), "path to config.toml")
 	devProxy := flag.String("dev-proxy", "", "reverse-proxy non-API routes to this Vite origin (e.g. http://localhost:5173)")
 	logLevel := flag.String("log-level", "info", "log level: debug|info|warn|error")
+	agentMode := flag.Bool("agent", false, "run as a worker agent: print the control-link connection details on startup")
+	envFile := flag.String("env-file", ".env", "path to a .env file for VPHONE_* variables")
 	flag.Parse()
 
 	logger := newLogger(*logLevel)
 	slog.SetDefault(logger)
 
-	if err := run(*configPath, *devProxy, logger); err != nil {
+	// Load .env (VPHONE_SYSTEM_PASSWORD etc.) before config so it can supply env.
+	if err := config.LoadDotEnv(*envFile); err != nil {
+		logger.Warn("failed to read env file", "path", *envFile, "err", err)
+	}
+
+	if err := run(*configPath, *devProxy, *agentMode, logger); err != nil {
 		logger.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath, devProxy string, logger *slog.Logger) error {
+func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -98,12 +111,34 @@ func run(configPath, devProxy string, logger *slog.Logger) error {
 		return err
 	}
 
+	// Clustering: controller-side node registry with health monitoring.
+	heartbeat := 10 * time.Second
+	if cfg.Cluster.HeartbeatInterval != "" {
+		if d, perr := time.ParseDuration(cfg.Cluster.HeartbeatInterval); perr == nil {
+			heartbeat = d
+		}
+	}
+	clusterMgr := cluster.NewManager(sqlDB, heartbeat, logger)
+	clusterMgr.Start()
+	defer clusterMgr.Stop()
+
+	// Agent mode: require the system password and print how to register this node.
+	if agentMode {
+		if cfg.Cluster.SystemPassword == "" {
+			return errIf("--agent requires a system password (set VPHONE_SYSTEM_PASSWORD or [cluster] system_password)")
+		}
+		printAgentBanner(cfg, logger)
+	}
+
 	staticFS, err := web.Dist()
 	if err != nil {
 		return err
 	}
 
-	srv := api.NewServer(cfg, mgr, queue, library, authSvc, logger)
+	srv := api.NewServer(cfg, api.Deps{
+		VMs: mgr, Jobs: queue, IPSW: library, Auth: authSvc,
+		Cluster: clusterMgr, Version: version, Log: logger,
+	})
 	handler := srv.Router(staticFS)
 
 	addr := netAddr(cfg.Server.Host, cfg.Server.Port)
@@ -143,6 +178,50 @@ func netAddr(host string, port int) string {
 		host = "0.0.0.0"
 	}
 	return host + ":" + strconv.Itoa(port)
+}
+
+// errIf returns an error carrying msg (small helper for readability).
+func errIf(msg string) error { return errors.New(msg) }
+
+// printAgentBanner prints how a controller can register this worker node.
+func printAgentBanner(cfg config.Config, logger *slog.Logger) {
+	addrs := lanAddrs()
+	port := cfg.Server.Port
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  ┌───────────────────────── vphone-web agent ─────────────────────────")
+	fmt.Fprintln(os.Stderr, "  │ This worker is ready to join a controller.")
+	fmt.Fprintln(os.Stderr, "  │ In the controller UI → Nodes → Add node, enter:")
+	if len(addrs) == 0 {
+		fmt.Fprintf(os.Stderr, "  │   Address:         <this-host-ip>:%d\n", port)
+	}
+	for _, a := range addrs {
+		fmt.Fprintf(os.Stderr, "  │   Address:         %s:%d\n", a, port)
+	}
+	fmt.Fprintln(os.Stderr, "  │   System password: (your VPHONE_SYSTEM_PASSWORD)")
+	fmt.Fprintln(os.Stderr, "  └─────────────────────────────────────────────────────────────────────")
+	fmt.Fprintln(os.Stderr, "")
+	logger.Info("agent mode enabled", "port", port, "addresses", addrs)
+}
+
+// lanAddrs returns this host's non-loopback IPv4 addresses.
+func lanAddrs() []string {
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
+				out = append(out, ipnet.IP.String())
+			}
+		}
+	}
+	return out
 }
 
 // buildAuth constructs the auth service from config and bootstraps the initial

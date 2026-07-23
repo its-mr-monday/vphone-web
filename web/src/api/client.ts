@@ -230,6 +230,12 @@ export const api = {
     request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
+  // Cluster nodes (admin)
+  listNodes: () => request<ClusterNode[]>("/nodes"),
+  registerNode: (body: { name: string; address: string; system_password: string }) =>
+    request<ClusterNode>("/nodes", { method: "POST", body: JSON.stringify(body) }),
+  deleteNode: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
+
   // Users (admin)
   listUsers: () => request<AuthUser[]>("/users"),
   createUser: (body: { username: string; password: string; role: UserRole }) =>
@@ -257,6 +263,24 @@ export interface AuthStatus {
   enabled: boolean;
   user?: AuthUser | null;
   providers?: string[];
+}
+
+export type NodeStatus = "ONLINE" | "OFFLINE" | "UNKNOWN";
+
+export interface ClusterNode {
+  id: string;
+  name: string;
+  address: string;
+  status: NodeStatus;
+  hostname?: string;
+  chip?: string;
+  cpu?: number;
+  memory_mb?: number;
+  running_vms: number;
+  version?: string;
+  error?: string;
+  last_seen?: string;
+  created_at: string;
 }
 
 function wsURL(path: string): string {

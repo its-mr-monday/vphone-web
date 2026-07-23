@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/cyberm-tech/vphone-web/internal/auth"
+	"github.com/cyberm-tech/vphone-web/internal/cluster"
 	"github.com/cyberm-tech/vphone-web/internal/config"
 	"github.com/cyberm-tech/vphone-web/internal/ipsw"
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
@@ -17,20 +18,40 @@ import (
 
 // Server holds the dependencies shared by all HTTP handlers.
 type Server struct {
-	cfg  config.Config
-	vms  *vm.Manager
-	jobs *jobs.Queue
-	ipsw *ipsw.Library
-	auth *auth.Service
-	log  *slog.Logger
+	cfg     config.Config
+	vms     *vm.Manager
+	jobs    *jobs.Queue
+	ipsw    *ipsw.Library
+	auth    *auth.Service
+	cluster *cluster.Manager
+	version string
+	log     *slog.Logger
+}
+
+// Deps bundles the collaborators an API server needs.
+type Deps struct {
+	VMs     *vm.Manager
+	Jobs    *jobs.Queue
+	IPSW    *ipsw.Library
+	Auth    *auth.Service
+	Cluster *cluster.Manager
+	Version string
+	Log     *slog.Logger
 }
 
 // NewServer constructs an API server.
-func NewServer(cfg config.Config, vms *vm.Manager, q *jobs.Queue, lib *ipsw.Library, authSvc *auth.Service, log *slog.Logger) *Server {
+func NewServer(cfg config.Config, d Deps) *Server {
+	log := d.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{cfg: cfg, vms: vms, jobs: q, ipsw: lib, auth: authSvc, log: log}
+	if d.Version == "" {
+		d.Version = "dev"
+	}
+	return &Server{
+		cfg: cfg, vms: d.VMs, jobs: d.Jobs, ipsw: d.IPSW, auth: d.Auth,
+		cluster: d.Cluster, version: d.Version, log: log,
+	}
 }
 
 // errorResponse is the JSON body returned for API errors.

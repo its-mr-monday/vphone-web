@@ -46,3 +46,10 @@ default_role       = "vphone-user"      # role for external users with no group 
 # enabled = true
 # url = "ldaps://ldap.example.com" ; base_dn = "dc=example,dc=com"
 # bind_dn = "..." ; bind_password = "..." ; user_filter = "(uid=%s)"
+
+# Clustering — a controller manages worker nodes (each a `vphone-web --agent`).
+# The system password is the shared secret on the controller↔worker control link.
+# Set it via VPHONE_SYSTEM_PASSWORD, a .env file, or here.
+[cluster]
+system_password    = ""                 # required to run --agent, and to register nodes
+heartbeat_interval = "10s"              # how often the controller health-polls nodes

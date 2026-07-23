@@ -7,6 +7,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { IPSWPage } from "./pages/IPSWPage";
 import { CreateVMPage } from "./pages/CreateVMPage";
 import { UsersPage } from "./pages/UsersPage";
+import { NodesPage } from "./pages/NodesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 
@@ -43,6 +44,7 @@ function Shell() {
             <Route path="/create" element={<CreateVMPage />} />
             <Route path="/vms/:id" element={<VMPage />} />
             <Route path="/ipsws" element={<IPSWPage />} />
+            <Route path="/nodes" element={<NodesPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

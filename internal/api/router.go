@@ -37,6 +37,10 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.Get("/providers", s.providers)
 		})
 
+		// Agent control surface — authenticated by the cluster system password,
+		// NOT the user session (this is the controller↔worker link).
+		r.With(s.requireSystemPassword).Get("/agent/health", s.agentHealth)
+
 		// User administration (admin only).
 		r.Group(func(r chi.Router) {
 			r.Use(admin)
@@ -44,6 +48,14 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.Post("/users", s.createUser)
 			r.Patch("/users/{id}", s.updateUser)
 			r.Delete("/users/{id}", s.deleteUser)
+		})
+
+		// Cluster node registry (admin only).
+		r.Group(func(r chi.Router) {
+			r.Use(admin)
+			r.Get("/nodes", s.listNodes)
+			r.Post("/nodes", s.registerNode)
+			r.Delete("/nodes/{id}", s.deleteNode)
 		})
 
 		r.Route("/vms", func(r chi.Router) {
