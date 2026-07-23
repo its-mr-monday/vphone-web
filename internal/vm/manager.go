@@ -208,6 +208,118 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	return v, nil
 }
 
+// UpdateConfigParams are the user-editable VM settings. Only applied while the
+// VM is STOPPED. Zero/empty fields fall back to the current value.
+type UpdateConfigParams struct {
+	Name             string
+	CPU              int
+	Memory           int // MiB
+	NetworkMode      string
+	NetworkInterface string
+}
+
+// UpdateConfig edits a stopped VM's tweakable settings (name, CPU, memory,
+// network). CPU/memory/network are rewritten into the VM's config.plist so the
+// next boot honors them; disk size, variant, and screen geometry are baked in at
+// provisioning time and cannot be changed here.
+func (m *Manager) UpdateConfig(id string, p UpdateConfigParams) (VM, error) {
+	v, err := m.store.get(id)
+	if err != nil {
+		return VM{}, err
+	}
+	if v.Status != StatusStopped {
+		return VM{}, fmt.Errorf("VM must be stopped to edit its configuration (current: %s)", v.Status)
+	}
+
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = v.Name
+	}
+	if !nameRe.MatchString(name) {
+		return VM{}, fmt.Errorf("invalid name %q: must be 1-64 chars, alphanumeric/dash/underscore", name)
+	}
+	cpu := p.CPU
+	if cpu <= 0 {
+		cpu = v.CPU
+	}
+	if cpu < 1 || cpu > 64 {
+		return VM{}, fmt.Errorf("cpu %d out of range (1-64)", cpu)
+	}
+	mem := p.Memory
+	if mem <= 0 {
+		mem = v.Memory
+	}
+	if mem < 512 || mem > 131072 {
+		return VM{}, fmt.Errorf("memory %d MiB out of range (512-131072)", mem)
+	}
+	mode := p.NetworkMode
+	if mode == "" {
+		mode = networkModeOrDefault(v.NetworkMode)
+	}
+	if !validNetworkModes[mode] {
+		return VM{}, fmt.Errorf("invalid network mode %q", mode)
+	}
+	iface := strings.TrimSpace(p.NetworkInterface)
+	if mode != "bridged" {
+		iface = "" // interface only meaningful in bridged mode
+	}
+
+	// Rewrite the manifest so `make boot` picks up the new resources/network.
+	if err := m.writeManifestConfig(v.VMDir, cpu, mem, mode, iface); err != nil {
+		return VM{}, err
+	}
+	if err := m.store.updateConfig(id, name, cpu, mem, mode, iface, time.Now()); err != nil {
+		return VM{}, err
+	}
+	m.log.Info("updated vm config", "id", id, "name", name, "cpu", cpu, "memory", mem,
+		"network", mode, "interface", iface)
+	return m.store.get(id)
+}
+
+// writeManifestConfig patches the VM's config.plist in place: cpuCount,
+// memorySize (bytes), and networkConfig.{mode,interface}. Uses PlistBuddy
+// (macOS built-in). The file is written at provisioning time so it always
+// exists for a provisioned VM.
+func (m *Manager) writeManifestConfig(vmDir string, cpu, memMiB int, mode, iface string) error {
+	plist := filepath.Join(vmDir, "config.plist")
+	if _, err := os.Stat(plist); err != nil {
+		return fmt.Errorf("config.plist not found for VM (not provisioned?): %w", err)
+	}
+	memBytes := int64(memMiB) * 1024 * 1024
+	cmds := [][]string{
+		{"-c", "Set :cpuCount " + strconv.Itoa(cpu)},
+		{"-c", "Set :memorySize " + strconv.FormatInt(memBytes, 10)},
+		{"-c", "Set :networkConfig:mode " + mode},
+	}
+	for _, c := range cmds {
+		if err := runPlistBuddy(plist, c[1]); err != nil {
+			return err
+		}
+	}
+	// The interface key is optional; set-or-add, and clear it when not bridged.
+	if iface != "" {
+		if err := runPlistBuddy(plist, "Set :networkConfig:interface "+iface); err != nil {
+			// Key may not exist yet — add it as a string.
+			if err2 := runPlistBuddy(plist, "Add :networkConfig:interface string "+iface); err2 != nil {
+				return fmt.Errorf("set network interface: %w", err2)
+			}
+		}
+	} else {
+		// Best-effort removal; ignore "does not exist" errors.
+		_ = runPlistBuddy(plist, "Delete :networkConfig:interface")
+	}
+	return nil
+}
+
+// runPlistBuddy runs a single PlistBuddy command against a plist file.
+func runPlistBuddy(plist, command string) error {
+	cmd := exec.Command("/usr/libexec/PlistBuddy", "-c", command, plist)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("PlistBuddy %q: %w: %s", command, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // ImportParams describe an existing, already-provisioned VM directory to adopt.
 type ImportParams struct {
 	Name       string

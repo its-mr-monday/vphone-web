@@ -119,6 +119,22 @@ func (s *store) setPID(id string, pid int, at time.Time) error {
 	return err
 }
 
+// updateConfig persists user-editable settings (only valid while STOPPED).
+func (s *store) updateConfig(id, name string, cpu, memory int, netMode, netIface string, at time.Time) error {
+	res, err := s.db.Exec(
+		`UPDATE vms SET name = ?, cpu = ?, memory = ?, network_mode = ?, network_interface = ?, updated_at = ?
+		 WHERE id = ?`,
+		name, cpu, memory, netMode, netIface, at.Format(rfc3339), id)
+	if err != nil {
+		return fmt.Errorf("update vm config: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // setIPSW records which IPSW a VM was provisioned from.
 func (s *store) setIPSW(id, ipswID string, at time.Time) error {
 	_, err := s.db.Exec(

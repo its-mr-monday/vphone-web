@@ -34,6 +34,11 @@ and proxies their VNC display, SSH terminal, and control socket into the browser
   (`golang.org/x/crypto/ssh`), with window-resize support and auto-reconnect.
 - **Hardware controls** — Home / Lock / Volume via `vphone.sock`, plus screenshot
   capture and download (full-resolution PNG).
+- **Editable config** — while a VM is stopped, tweak its name, CPU, memory, and
+  network (mode + bridge interface) from the Info panel's gear; changes are
+  written back into the VM's `config.plist` for the next boot. The gear is
+  disabled while the VM is running. The Info panel also shows the guest's live
+  IP address (read from the control socket).
 - **Adopt existing VMs** — import a VM directory provisioned directly by
   vphone-cli (Import Device), and delete VMs as a tracked job with live progress.
 - **Export / import bundles** — export a stopped VM to a `.vphonevm.zip`

@@ -67,6 +67,7 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 			r.With(admin).Post("/import-bundle", s.importBundle)
 			r.Route("/{id}", func(r chi.Router) {
 				r.With(user).Get("/", s.getVM)
+				r.With(admin).Patch("/", s.updateVM)
 				r.With(admin).Get("/export", s.exportVM)
 				r.With(admin).Delete("/", s.deleteVM)
 				r.With(user).Post("/boot", s.bootVM)

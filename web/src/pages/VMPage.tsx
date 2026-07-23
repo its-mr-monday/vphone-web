@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams, Link, useSearchParams } from "react-router-dom";
-import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks } from "lucide-react";
+import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks, Settings } from "lucide-react";
 import { api } from "../api/client";
 import { useVM } from "../hooks/useVM";
+import { useAuth } from "../hooks/useAuth";
+import { VMSettingsDialog } from "../components/vm/VMSettingsDialog";
 import { useJobs } from "../hooks/useJobs";
 import { VMDisplay } from "../components/vm/VMDisplay";
 import { VMControls } from "../components/vm/VMControls";
@@ -111,6 +113,10 @@ export function VMPage() {
 
 function InfoPanel({ vm }: { vm: VM }) {
   const running = vm.status === "RUNNING";
+  const { isAdmin } = useAuth();
+  const [editing, setEditing] = useState(false);
+  // Config is only editable while the VM is fully stopped.
+  const editable = isAdmin && vm.status === "STOPPED";
   // Live guest metadata (IP address, reported iOS) from the control socket.
   const { data: guest } = useQuery({
     queryKey: ["vm-info", vm.id],
@@ -156,7 +162,29 @@ function InfoPanel({ vm }: { vm: VM }) {
 
   return (
     <div className="grid h-full grid-cols-1 gap-4 overflow-y-auto lg:grid-cols-2">
-      <Section title="Configuration">
+      <Section
+        title="Configuration"
+        action={
+          isAdmin ? (
+            <button
+              onClick={() => editable && setEditing(true)}
+              disabled={!editable}
+              title={
+                editable
+                  ? "Edit configuration"
+                  : "Stop the VM to edit its configuration"
+              }
+              className={`-my-1 rounded-sm p-1 transition-colors ${
+                editable
+                  ? "text-fg-dim hover:bg-border/40 hover:text-accent"
+                  : "cursor-not-allowed text-fg-muted/40"
+              }`}
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </button>
+          ) : null
+        }
+      >
         <table className="w-full">
           <tbody>
             {rows.map(([k, v]) => (
@@ -180,14 +208,27 @@ function InfoPanel({ vm }: { vm: VM }) {
           </tbody>
         </table>
       </Section>
+
+      {editing && <VMSettingsDialog vm={vm} onClose={() => setEditing(false)} />}
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-md border border-border bg-surface p-4">
-      <h3 className="mb-3 font-mono text-[10px] uppercase tracking-widest text-fg-dim">{title}</h3>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-mono text-[10px] uppercase tracking-widest text-fg-dim">{title}</h3>
+        {action}
+      </div>
       {children}
     </div>
   );

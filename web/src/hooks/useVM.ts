@@ -86,3 +86,15 @@ export function useStopVM() {
     },
   });
 }
+
+export function useUpdateVM() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof api.updateVM>[1] }) =>
+      api.updateVM(id, body),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: KEYS.all });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+    },
+  });
+}

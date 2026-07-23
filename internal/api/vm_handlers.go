@@ -106,6 +106,42 @@ func (s *Server) getVM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// updateVMRequest is the PATCH /api/v1/vms/:id body. Omitted fields are left
+// unchanged; the VM must be STOPPED.
+type updateVMRequest struct {
+	Name             string `json:"name"`
+	CPU              int    `json:"cpu"`
+	Memory           int    `json:"memory"`
+	NetworkMode      string `json:"network_mode"`
+	NetworkInterface string `json:"network_interface"`
+}
+
+// updateVM handles PATCH /api/v1/vms/:id — edit a stopped VM's settings.
+func (s *Server) updateVM(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req updateVMRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	v, err := s.vms.UpdateConfig(id, vm.UpdateConfigParams{
+		Name:             req.Name,
+		CPU:              req.CPU,
+		Memory:           req.Memory,
+		NetworkMode:      req.NetworkMode,
+		NetworkInterface: req.NetworkInterface,
+	})
+	if errors.Is(err, vm.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
 // deleteVM handles DELETE /api/v1/vms/:id. Deletion runs as a tracked job with
 // streamed progress; the VM is marked DELETING and the job id is returned so the
 // UI can watch the log until the VM disappears.
