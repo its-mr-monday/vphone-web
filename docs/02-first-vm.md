@@ -5,13 +5,38 @@ library, then **create a VM** that provisions from it.
 
 ## The IPSW library
 
-Every VM is provisioned from an IPSW (Apple's firmware image). vphone-web tracks
-your IPSWs in a library so multiple VMs can share one image (patching happens
-per-VM). Open **IPSW Library** in the sidebar.
+Every VM is provisioned from firmware images. vphone-web tracks your IPSWs in a
+library so multiple VMs can share one image (patching happens per-VM). Open
+**IPSW Library** in the sidebar.
 
-An IPSW record has: `version`, `build`, `device` (e.g. `iPhone17,3`),
+An IPSW record has: `version`, `build`, `device` (e.g. `iPhone17,3`), `kind`,
 `source_url`, `file_path`, `size`, `sha256`, and a `status` of `DOWNLOADING`,
 `READY`, or `ERROR`.
+
+### Two firmware sources: iPhone + CloudOS
+
+vphone-cli builds a VM from **two** firmwares, so each library entry has a
+**kind** (an iPhone/CloudOS toggle when you add it):
+
+- **iPhone** (`IPHONE_SOURCE`) — the iOS device firmware (the version you want to
+  run).
+- **CloudOS** (`CLOUDOS_SOURCE`) — Apple's PCC (Private Cloud Compute) research
+  stack that the VM boots on.
+
+For older iOS these effectively coincide, but **newer iOS pairs a newer iPhone
+firmware with an older CloudOS stack** — e.g. **iOS 27 = iPhone `27.0` +
+CloudOS `26.4 (23E5207q)`**. See the compatibility table in the
+[vphone-cli README](../vphone-cli/README.md). When you don't pick a CloudOS
+entry, the build uses vphone-cli's built-in default (26.1), which is fine for
+iOS ≤ 26.1.
+
+To build a newer iOS, add **both** — the iPhone IPSW (kind *iPhone*) and the
+matching CloudOS IPSW (kind *CloudOS*) — then pick both in the create wizard.
+
+> **iOS 27 note:** iOS 27.0 is currently a **beta** (build `24A5380h` /
+> `24A5390f`) — it isn't in Apple's signed-IPSW list, so source the iPhone beta
+> IPSW from the Apple Developer program (or a beta IPSW mirror) and the CloudOS
+> `26.4-23E5207q` PCC image, then add both to the library.
 
 You can add an IPSW three ways:
 
@@ -52,7 +77,8 @@ Open **Create VM** (or the `+` in the sidebar) and choose:
 | Field | Meaning | Default |
 |-------|---------|---------|
 | **Name** | 1–64 chars, `[A-Za-z0-9_-]` | — |
-| **IPSW** | which library image to provision from | — |
+| **iPhone firmware** | the iPhone IPSW to provision from (`IPHONE_SOURCE`) | — |
+| **CloudOS firmware** | the PCC IPSW (`CLOUDOS_SOURCE`); *Default* uses the built-in stack | Default |
 | **Variant** | firmware flavor (below) | Regular |
 | **CPU** | virtual cores | 4 |
 | **Memory** | MiB | 4096 |
