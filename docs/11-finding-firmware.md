@@ -75,12 +75,30 @@ ipsw download pcc --build 5E290          # filter by cloudOS build prefix
 > (`brew upgrade ipsw`) and retry; the `--version` / `--build` filters sometimes
 > get past it. If it stays broken, use the sources below.
 
-### 2. Apple's PCC Virtual Research Environment
+### 2. AppleDB — the most reliable source
+
+[AppleDB](https://appledb.dev) catalogs every CloudOS build under the PCC node's
+device identifier, **`ComputeModule14,1`** ("Private Cloud Compute Node"):
+
+<https://appledb.dev/device/identifier/ComputeModule14,1.html>
+
+Each build has a **Download** link straight to Apple's CDN. This is the go-to
+source while `ipsw download pcc` is broken. Example (the build iOS 26.4–27.0 need):
+
+```
+cloudOS 26.4 (23E5207q) →
+https://updates.cdn-apple.com/private-cloud-compute/c0ecdb4b310cf5239ab2b248dd3098eec297dc5aa3bbe6ada27273262b0b8b64
+```
+
+Paste that URL into **IPSW Library → Download from URL** (kind **CloudOS**), or
+download it and **Upload** it.
+
+### 3. Apple's PCC Virtual Research Environment
 
 <https://security.apple.com/private-cloud-compute/> — Apple's PCC research portal
 lists released CloudOS builds and their images (the "PCC VRE").
 
-### 3. Direct CDN (what vphone-cli uses)
+### 4. Direct CDN (what vphone-cli uses)
 
 PCC images live under `https://updates.cdn-apple.com/private-cloud-compute/<hash>`.
 vphone-cli's built-in default (used when you pick **Default** for CloudOS) is the
