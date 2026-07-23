@@ -735,6 +735,24 @@ func (m *Manager) startFridaForward(v VM, rt *runtime) {
 	go m.superviseForward(v, stop, &rt.fridaWG, forwardSpec{v.Ports.Frida, 27042, "frida", "0.0.0.0"})
 }
 
+// vmUDID reads a VM's device UDID from the udid-prediction.txt that vphone-cli
+// writes into the VM directory during DFU/restore (line: "UDID=<udid>"). It is
+// used to target usbmux forwards at the correct device — without it, a bare
+// `usbmux forward` binds to whichever device usbmuxd lists first, so multiple
+// running VMs would all tunnel to the same guest. Returns "" if unavailable.
+func vmUDID(vmDir string) string {
+	data, err := os.ReadFile(filepath.Join(vmDir, "udid-prediction.txt"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "UDID="); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // superviseForward keeps a single usbmux forward alive until stop is closed,
 // restarting it whenever the underlying process exits (the guest endpoint only
 // appears once iOS has booted far enough).
@@ -747,8 +765,16 @@ func (m *Manager) superviseForward(v VM, stop <-chan struct{}, wg *sync.WaitGrou
 			return
 		default:
 		}
-		// usbmux forward [--host BIND] <HOST_PORT> <DEVICE_PORT>
+		// usbmux forward [--serial UDID] [--host BIND] <HOST_PORT> <DEVICE_PORT>
+		// --serial pins the tunnel to THIS VM's device; without it multiple
+		// running VMs collide onto whichever device usbmuxd lists first.
 		args := []string{"-m", "pymobiledevice3", "usbmux", "forward"}
+		if udid := vmUDID(v.VMDir); udid != "" {
+			args = append(args, "--serial", udid)
+		} else {
+			m.log.Warn("no UDID for VM; usbmux forward may target the wrong device when multiple VMs run",
+				"vm", v.ID, "service", f.label)
+		}
 		if f.bindHost != "" {
 			args = append(args, "--host", f.bindHost)
 		}
