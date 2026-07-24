@@ -53,12 +53,18 @@ enumeration via `frida-ps`:
   from the Frida APT repo as a streamed job, start/stop, version/status) and
   enumerates running applications live via the host `frida-ps` over a forwarded
   frida port — the foundation for dynamic instrumentation.
-- **MCP server** — `vphone-web -mcp` speaks the Model Context Protocol on stdio so
-  an AI agent can drive the lab: list/boot VMs, capture the screen as an image,
-  tap/swipe/press hardware keys, run shell commands on the guest (`/exec`),
-  enumerate apps via Frida, and manage snapshots. It runs as a *client* of a live
-  server, so it never contends for the database or VM processes:
-  `claude mcp add vphone -- /path/to/bin/vphone-web -mcp`
+- **MCP server** — a **standalone** binary (`make mcp` → `bin/vphone-mcp`) speaking
+  the Model Context Protocol on stdio, so an AI agent can drive the lab: list/boot
+  VMs, capture the screen as an image, tap/swipe/press hardware keys, run shell
+  commands on the guest (`/exec`), enumerate apps via Frida, and manage snapshots.
+  It is a pure REST *client* — it embeds no frontend, never opens the database, and
+  can target a local **or remote** instance, so it never contends with the server.
+  Config is its own (`~/.config/vphone-mcp/config.toml`, optional — see
+  `config.mcp.example.toml`); with no config it targets a local server.
+  ```bash
+  make mcp
+  claude mcp add vphone -- /path/to/bin/vphone-mcp
+  ```
 - **Guest shell exec** — `POST /vms/:id/exec` runs a single command over SSH and
   returns stdout/stderr/exit code (the request/response counterpart to the
   interactive terminal), for scripting and automation.

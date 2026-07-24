@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // defaultProtocolVersion is advertised when a client does not request one.
@@ -96,18 +95,17 @@ type Server struct {
 	log     *slog.Logger
 }
 
-// New builds an MCP server targeting the vphone-web instance at baseURL (e.g.
-// "http://127.0.0.1:8099"). token, when non-empty, is sent as a bearer token for
-// servers that have access control enabled.
-func New(baseURL, token, version string, log *slog.Logger) *Server {
+// New builds an MCP server targeting the vphone-web instance described by cfg.
+// The MCP server is purely a REST client, so the instance may be local or remote.
+func New(cfg Config, version string, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	s := &Server{
-		base:    strings.TrimRight(baseURL, "/"),
-		token:   token,
+		base:    strings.TrimRight(cfg.Server.URL, "/"),
+		token:   cfg.Server.Token,
 		version: version,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: cfg.RequestTimeout()},
 		log:     log,
 	}
 	s.registerTools()

@@ -1,0 +1,23 @@
+# vphone-mcp configuration — the standalone MCP server.
+#
+# Copy to ~/.config/vphone-mcp/config.toml and edit, or run
+# `vphone-mcp -print-config > ~/.config/vphone-mcp/config.toml`.
+#
+# This file is OPTIONAL. With no config at all, vphone-mcp targets a local
+# vphone-web at http://127.0.0.1:8099.
+#
+# Precedence: -url/-token flags  >  VPHONE_MCP_URL / VPHONE_MCP_TOKEN  >  this file.
+#
+# Note this is the MCP client's own config — it is deliberately separate from the
+# vphone-web server's config.toml, because the MCP server may point at a remote
+# instance (a lab Mac mini, a worker node) rather than the local one.
+
+[server]
+# The vphone-web instance to drive.
+url = "http://127.0.0.1:8099"
+
+# Bearer token — only needed when the instance has access control enabled.
+# token = ""
+
+# Per-request timeout (Go duration). Raise it if you run long guest commands.
+# timeout = "120s"

@@ -7,6 +7,8 @@
 
 BINARY      := bin/vphone-web
 PKG         := ./cmd/vphone-web
+MCP_BINARY  := bin/vphone-mcp
+MCP_PKG     := ./cmd/vphone-mcp
 WEB         := web
 GO          := go
 VITE_ORIGIN := http://localhost:5173
@@ -56,6 +58,13 @@ release: web-build ## Optimized, stripped, smaller binary
 .PHONY: run
 run: build ## Build and run the production binary
 	$(BINARY)
+
+.PHONY: mcp
+mcp: ## Build just the MCP server (fast — no frontend build)
+	@mkdir -p bin
+	$(GO) build -o $(MCP_BINARY) $(MCP_PKG)
+	@echo ">> built $(MCP_BINARY)"
+	@echo ">> register with: claude mcp add vphone -- $(CURDIR)/$(MCP_BINARY)"
 
 ## ---------------------------------------------------------------------------
 ## Frontend helpers
