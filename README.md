@@ -53,6 +53,15 @@ enumeration via `frida-ps`:
   from the Frida APT repo as a streamed job, start/stop, version/status) and
   enumerates running applications live via the host `frida-ps` over a forwarded
   frida port — the foundation for dynamic instrumentation.
+- **MCP server** — `vphone-web -mcp` speaks the Model Context Protocol on stdio so
+  an AI agent can drive the lab: list/boot VMs, capture the screen as an image,
+  tap/swipe/press hardware keys, run shell commands on the guest (`/exec`),
+  enumerate apps via Frida, and manage snapshots. It runs as a *client* of a live
+  server, so it never contends for the database or VM processes:
+  `claude mcp add vphone -- /path/to/bin/vphone-web -mcp`
+- **Guest shell exec** — `POST /vms/:id/exec` runs a single command over SSH and
+  returns stdout/stderr/exit code (the request/response counterpart to the
+  interactive terminal), for scripting and automation.
 - **Editable config** — while a VM is stopped, tweak its name, CPU, memory, and
   network (mode + bridge interface) from the Info panel's gear; changes are
   written back into the VM's `config.plist` for the next boot. The gear is
@@ -155,7 +164,7 @@ a default; any value can be overridden with a `VPHONE_WEB_*` environment variabl
 
 ```
 VMs        GET/POST /vms · GET/DELETE /vms/:id · POST /vms/:id/{boot,stop,restart}
-Control    POST /vms/:id/{screenshot,touch,key}
+Control    POST /vms/:id/{screenshot,touch,key,exec}
 Display    GET (ws) /vms/:id/vnc · GET (ws) /vms/:id/terminal
 Snapshots  GET/POST /vms/:id/snapshots · POST /vms/:id/snapshots/:name/restore · DELETE …/:name
 IPSWs      GET/POST /ipsws · POST /ipsws/{download,upload} · DELETE /ipsws/:id

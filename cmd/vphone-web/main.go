@@ -33,6 +33,7 @@ import (
 	"github.com/cyberm-tech/vphone-web/internal/db"
 	"github.com/cyberm-tech/vphone-web/internal/ipsw"
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
+	"github.com/cyberm-tech/vphone-web/internal/mcp"
 	"github.com/cyberm-tech/vphone-web/internal/vm"
 	"github.com/cyberm-tech/vphone-web/web"
 )
@@ -46,6 +47,9 @@ func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug|info|warn|error")
 	agentMode := flag.Bool("agent", false, "run as a worker agent: print the control-link connection details on startup")
 	envFile := flag.String("env-file", ".env", "path to a .env file for VPHONE_* variables")
+	mcpMode := flag.Bool("mcp", false, "run as an MCP server on stdio, driving a running vphone-web instance")
+	mcpURL := flag.String("mcp-url", "", "base URL of the vphone-web server for -mcp (default: from config host/port)")
+	mcpToken := flag.String("mcp-token", "", "bearer token for -mcp when the server has access control enabled")
 	flag.Parse()
 
 	logger := newLogger(*logLevel)
@@ -56,10 +60,48 @@ func main() {
 		logger.Warn("failed to read env file", "path", *envFile, "err", err)
 	}
 
+	if *mcpMode {
+		if err := runMCP(*configPath, *mcpURL, *mcpToken, logger); err != nil {
+			logger.Error("mcp server failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(*configPath, *devProxy, *agentMode, logger); err != nil {
 		logger.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// runMCP serves the Model Context Protocol on stdio, acting as a client of a
+// running vphone-web instance. Logging is forced to stderr because stdout is the
+// MCP transport — anything else written there corrupts the protocol stream.
+func runMCP(configPath, baseURL, token string, logger *slog.Logger) error {
+	if baseURL == "" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		host := cfg.Server.Host
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "127.0.0.1"
+		}
+		scheme := "http"
+		if cfg.Server.TLSEnabled {
+			scheme = "https"
+		}
+		baseURL = fmt.Sprintf("%s://%s:%d", scheme, host, cfg.Server.Port)
+	}
+	if token == "" {
+		token = os.Getenv("VPHONE_WEB_TOKEN")
+	}
+
+	stderrLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	stderrLog.Info("vphone-web MCP server on stdio", "target", baseURL)
+
+	srv := mcp.New(baseURL, token, version, stderrLog)
+	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
 }
 
 func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error {
