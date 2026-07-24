@@ -98,6 +98,7 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 				r.With(user, remote).Post("/frida/start", s.fridaStart)
 				r.With(user, remote).Post("/frida/stop", s.fridaStop)
 				r.With(admin, remote).Post("/frida/port", s.fridaSetPort)
+				r.With(user, remote).Post("/exec", s.execCommand)
 				r.With(user, remote).Post("/screenshot", s.screenshot)
 				r.With(user, remote).Post("/touch", s.touch)
 				r.With(user, remote).Post("/key", s.key)
