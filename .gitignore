@@ -29,3 +29,6 @@
 
 # stray root build artifact (real output is bin/vphone-web)
 /vphone-web
+
+# Claude Code local session/config
+.claude/
