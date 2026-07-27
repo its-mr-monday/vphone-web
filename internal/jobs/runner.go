@@ -43,7 +43,13 @@ func execStreaming(ctx context.Context, c Command, out io.Writer) error {
 	cmd := exec.Command(c.Name, c.Args...)
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Setsid, not just Setpgid: a new session detaches the child from the
+	// server's controlling terminal. With only Setpgid the job lands in a
+	// background process group on that tty, and the first terminal access from
+	// make/zsh raises SIGTTIN/SIGTTOU and stops the job forever (it sits in
+	// state T having copied nothing). The child is still its own process-group
+	// leader, so the kill(-pid) teardown below is unaffected.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
