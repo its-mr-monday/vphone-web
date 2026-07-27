@@ -336,7 +336,11 @@ func (s *Server) registerTools() {
 				if name == "" {
 					return errResult(fmt.Errorf("name is required"))
 				}
-				return s.simpleOK("POST", "/vms/"+id+"/snapshots", "snapshot created")
+				var out any
+				if err := s.call("POST", "/vms/"+id+"/snapshots", map[string]string{"name": name}, &out); err != nil {
+					return errResult(err)
+				}
+				return jsonResult(out)
 			},
 		},
 		{
