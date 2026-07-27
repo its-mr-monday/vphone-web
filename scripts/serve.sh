@@ -27,5 +27,21 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# Ensure the amfidont AMFI-bypass daemon is running. Without it, AMFI SIGKILLs the
+# signed vphone-cli (exit 137) and no VM can boot. The daemon does NOT survive a
+# host reboot, so we (re)start it here. This is idempotent: if it's already up we
+# leave it alone. Runs as `python3 -m amfidont --spoof-apple`, so match on cmdline.
+if pgrep -f 'amfidont .*--spoof-apple' >/dev/null 2>&1; then
+  echo ">> amfidont already running"
+else
+  echo ">> amfidont not running — starting (make amfidont_allow_vphone)"
+  if make -C "$REPO_ROOT/vphone-cli" amfidont_allow_vphone; then
+    echo ">> amfidont started"
+  else
+    echo "!! amfidont failed to start — VMs will not boot (AMFI will exit 137)." >&2
+    echo "   see /tmp/amfidont-vphone.log; server will start anyway." >&2
+  fi
+fi
+
 echo ">> vphone-web starting (config: $CONFIG)"
 exec "$BINARY" -config "$CONFIG" -log-level info
