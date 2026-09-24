@@ -21,68 +21,53 @@ import (
 // updating VM status as it progresses. Each step waits for the previous one to
 // succeed; the first failure marks the VM ERROR and halts the chain.
 //
-//	vm_new → [fw_prepare → fw_patch_<variant> → restore → cfw_install_<variant>] → STOPPED
+//	vm new → [fw prepare → fw patch → restore → cfw install] → STOPPED
 //
-// The bracketed firmware steps only run when an IPSW was provided; a bare
-// create (no IPSW) stops after vm_new.
+// The firmware steps only run when an IPSW was provided; a bare create (no
+// IPSW) stops after vm new.
 func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	if m.jobs == nil {
 		m.markError(v.ID, "job queue unavailable; cannot provision")
 		return
 	}
-	cliDir := m.opts.VphoneCLIDir
-	vmDirArg := "VM_DIR=" + v.VMDir
 
-	// Step 1 — create the VM directory + manifest.
-	if err := m.runStep(v, "vm_new", "vm_new", jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil),
-		Args: []string{
-			"vm_new", vmDirArg,
-			"CPU=" + strconv.Itoa(v.CPU),
-			"MEMORY=" + strconv.Itoa(v.Memory),
-			"DISK_SIZE=" + strconv.Itoa(diskGiB(v.DiskSize)),
-			"NETWORK_MODE=" + networkModeOrDefault(v.NetworkMode),
-			"NET_INTERFACE=" + v.NetworkInterface,
-		},
-	})); err != nil {
+	// Step 1 — create the VM bundle via vphone-cli vm new.
+	if err := m.runStep(v, "vm_new", "vm_new", m.cliRunFunc(
+		"vm", "new", v.Name,
+		"--cpu", strconv.Itoa(v.CPU),
+		"--memory", strconv.FormatUint(uint64(v.Memory), 10),
+		"--disk-size", strconv.FormatUint(uint64(diskGiB(v.DiskSize)), 10),
+	)); err != nil {
 		m.failStep(v.ID, "vm_new", err)
 		return
 	}
 
 	if ipswPath == "" {
-		// Bare shell — no firmware. Ready to configure/backup but not bootable.
 		_ = m.store.updateStatus(v.ID, StatusStopped, "", time.Now())
 		m.log.Info("vm created (bare, no firmware)", "vm", v.ID)
 		return
 	}
 
-	// Step 2 — download/extract/merge firmware from the chosen IPSW(s). The
-	// iPhone (iOS device) firmware and the CloudOS (PCC research stack) are
-	// separate sources — for newer iOS they differ (e.g. iOS 27 pairs iPhone 27.0
-	// with CloudOS 26.4). When no CloudOS source is given, fw_prepare falls back
-	// to its built-in default.
-	fwArgs := []string{"IPHONE_SOURCE=" + ipswPath}
+	// Step 2 — download/extract/merge firmware from the chosen IPSW(s).
+	fwArgs := []string{"fw", "prepare", v.Name, "--iphone-source", ipswPath}
 	if cloudosPath != "" {
-		fwArgs = append(fwArgs, "CLOUDOS_SOURCE="+cloudosPath)
+		fwArgs = append(fwArgs, "--cloudos-source", cloudosPath)
 	}
-	fwEnv := m.makeEnv(fwArgs)
-	if err := m.runStep(v, "fw_prepare", "fw_prepare", jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: fwEnv, Args: []string{"fw_prepare", vmDirArg},
-	})); err != nil {
+	if err := m.runStep(v, "fw_prepare", "fw_prepare", m.cliRunFunc(fwArgs...)); err != nil {
 		m.failStep(v.ID, "fw_prepare", err)
 		return
 	}
 
-	// Step 3 — patch the boot chain for the chosen variant.
-	patchTarget := fwPatchTarget(v.Variant)
-	if err := m.runStep(v, "fw_patch", patchTarget, jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil), Args: []string{patchTarget, vmDirArg},
-	})); err != nil {
-		m.failStep(v.ID, patchTarget, err)
+	// Step 3 — patch the boot chain. v2 uses a native Swift patcher; variant
+	// selection is baked into the pipeline (JB by default).
+	if err := m.runStep(v, "fw_patch", "fw_patch", m.cliRunFunc(
+		"fw", "patch", v.Name,
+	)); err != nil {
+		m.failStep(v.ID, "fw_patch", err)
 		return
 	}
 
-	// Step 4 — restore (boot_dfu background + pmd3 restore), status RESTORING.
+	// Step 4 — restore (DFU boot + firmware flash), status RESTORING.
 	_ = m.store.updateStatus(v.ID, StatusRestoring, "", time.Now())
 	if err := m.runStep(v, "restore", "restore", m.restoreRun(v)); err != nil {
 		m.failStep(v.ID, "restore", err)
@@ -91,11 +76,10 @@ func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 
 	// Step 5 — install CFW offline (VM stopped), status INSTALLING_CFW.
 	_ = m.store.updateStatus(v.ID, StatusInstalling, "", time.Now())
-	cfwTarget := cfwInstallTarget(v.Variant)
-	if err := m.runStep(v, "cfw_install", cfwTarget, jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil), Args: []string{cfwTarget, vmDirArg},
-	})); err != nil {
-		m.failStep(v.ID, cfwTarget, err)
+	if err := m.runStep(v, "cfw_install", "cfw_install", m.cliRunFunc(
+		"cfw", "install", v.Name,
+	)); err != nil {
+		m.failStep(v.ID, "cfw_install", err)
 		return
 	}
 
@@ -134,35 +118,88 @@ func (m *Manager) markError(id, msg string) {
 	_ = m.store.updateStatus(id, StatusError, msg, time.Now())
 }
 
-// restoreRun coordinates the two concurrent processes of the restore phase:
-// `make boot_dfu` running in the background (holding the VM in DFU) while
-// `make restore_get_shsh` + `make restore` drive the firmware flash. When the
-// restore completes (or fails), boot_dfu is torn down.
+// cliPath returns the absolute path to the vphone-cli binary. It checks
+// several known build output locations in order: the VPhone.app bundle's
+// MacOS dir, the Xcode DerivedData output, and the legacy .build/release.
+func (m *Manager) cliPath() string {
+	candidates := []string{
+		filepath.Join(m.opts.VphoneCLIDir, ".build", "XcodeCommand", "Build", "Products", "Release", "vphone-cli"),
+		filepath.Join(m.opts.VphoneCLIDir, ".build", "release", "vphone-cli"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return candidates[len(candidates)-1]
+}
+
+// cliRunFunc returns a RunFunc that invokes vphone-cli with the given
+// subcommand arguments. The --library-root flag is appended so the CLI
+// operates against the managed VM root (our library directory). In v2's
+// ArgumentParser, --library-root is an OptionGroup on each subcommand, so it
+// goes after the subcommand name.
+func (m *Manager) cliRunFunc(args ...string) jobs.RunFunc {
+	fullArgs := append(args, "--library-root", m.opts.VMRoot)
+	return jobs.RunCommand(jobs.Command{
+		Name: m.cliPath(),
+		Args: fullArgs,
+		Dir:  m.opts.VphoneCLIDir,
+		Env:  m.cliEnv(nil),
+	})
+}
+
+// cliEnv builds the environment for vphone-cli invocations, prepending the
+// CLI's venv and tools bin dirs (so pymobiledevice3, aria2c, trustcache
+// resolve) and layering any extra KEY=VALUE entries.
+func (m *Manager) cliEnv(extra []string) []string {
+	env := os.Environ()
+	prepend := strings.Join([]string{
+		filepath.Dir(m.cliPath()),
+		filepath.Join(m.opts.VphoneCLIDir, ".build", "release"),
+		filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin"),
+		filepath.Join(m.opts.VphoneCLIDir, ".tools", "bin"),
+	}, string(os.PathListSeparator))
+	found := false
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + prepend + string(os.PathListSeparator) + strings.TrimPrefix(e, "PATH=")
+			found = true
+			break
+		}
+	}
+	if !found {
+		env = append(env, "PATH="+prepend)
+	}
+	return append(env, extra...)
+}
+
+// restoreRun coordinates the restore phase: `vphone-cli vm launch --dfu` runs
+// in the background (holding the VM in DFU) while `vphone-cli restore` drives
+// the firmware flash. When the restore completes (or fails), the DFU process
+// is torn down.
 func (m *Manager) restoreRun(v VM) jobs.RunFunc {
 	return func(ctx context.Context, out io.Writer) error {
-		cliDir := m.opts.VphoneCLIDir
-		env := m.makeEnv(nil)
-		vmDirArg := "VM_DIR=" + v.VMDir
+		cli := m.cliPath()
+		env := m.cliEnv(nil)
 
-		// Remove any stale ECID prediction so we detect the fresh one this boot
-		// writes (avoids an identity race, per the vphone-cli reference flow).
-		predictionFile := filepath.Join(v.VMDir, "udid-prediction.txt")
+		predictionFile := filepath.Join(m.vmBundleDir(v), "udid-prediction.txt")
 		_ = os.Remove(predictionFile)
 
-		fmt.Fprintln(out, "== starting boot_dfu (background) ==")
+		fmt.Fprintln(out, "== starting DFU boot (background) ==")
 		pr, pw := io.Pipe()
-		dfu := exec.Command("make", "boot_dfu", vmDirArg)
-		dfu.Dir = cliDir
+		dfuArgs := []string{"vm", "launch", v.Name, "--dfu", "--library-root", m.opts.VMRoot}
+		dfu := exec.Command(cli, dfuArgs...)
+		dfu.Dir = m.opts.VphoneCLIDir
 		dfu.Env = env
 		dfu.Stdout = pw
 		dfu.Stderr = pw
 		dfu.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := dfu.Start(); err != nil {
-			return fmt.Errorf("start boot_dfu: %w", err)
+			return fmt.Errorf("start DFU boot: %w", err)
 		}
 		dfuPID := dfu.Process.Pid
 
-		// Tee DFU output to the job log and watch for the DFU-ready marker.
 		marker := make(chan struct{}, 1)
 		go func() {
 			sc := bufio.NewScanner(pr)
@@ -189,31 +226,28 @@ func (m *Manager) restoreRun(v VM) jobs.RunFunc {
 		}
 		defer stopDFU()
 
-		// Readiness: the authoritative signal is udid-prediction.txt appearing
-		// (the VM is in DFU and its identity was predicted). The stdout marker is
-		// a secondary trigger since it is not always flushed to the captured pipe.
 		ready := waitForDFUReady(ctx, predictionFile, marker, dfuExit)
 		switch ready {
 		case dfuReady:
 			fmt.Fprintln(out, "== DFU mode reached ==")
 		case dfuEarlyExit:
-			return errors.New("boot_dfu exited before reaching DFU mode")
+			return errors.New("DFU boot exited before reaching DFU mode")
 		case dfuTimeout:
 			return errors.New("timed out waiting for DFU mode (180s)")
 		case dfuCancelled:
 			return ctx.Err()
 		}
 
-		time.Sleep(3 * time.Second) // brief settle for the recovery endpoint
+		time.Sleep(3 * time.Second)
 
-		for _, target := range []string{"restore_get_shsh", "restore"} {
-			fmt.Fprintf(out, "== make %s ==\n", target)
-			run := jobs.RunCommand(jobs.Command{
-				Name: "make", Dir: cliDir, Env: env, Args: []string{target, vmDirArg},
-			})
-			if err := run(ctx, out); err != nil {
-				return fmt.Errorf("%s failed: %w", target, err)
-			}
+		// Run restore (SHSH fetch + flash) via vphone-cli restore.
+		fmt.Fprintln(out, "== vphone-cli restore ==")
+		restoreArgs := []string{"restore", v.Name, "--library-root", m.opts.VMRoot}
+		restoreRun := jobs.RunCommand(jobs.Command{
+			Name: cli, Args: restoreArgs, Dir: m.opts.VphoneCLIDir, Env: env,
+		})
+		if err := restoreRun(ctx, out); err != nil {
+			return fmt.Errorf("restore failed: %w", err)
 		}
 
 		fmt.Fprintln(out, "== restore complete; stopping DFU ==")
@@ -258,12 +292,11 @@ func waitForDFUReady(ctx context.Context, predictionFile string, marker <-chan s
 		case <-ctx.Done():
 			return dfuCancelled
 		case <-tick.C:
-			// re-check the prediction file
 		}
 	}
 }
 
-// isDFUReady matches the boot_dfu stdout marker indicating the VM is in DFU.
+// isDFUReady matches the DFU stdout marker indicating the VM is in DFU.
 func isDFUReady(line string) bool {
 	l := strings.ToLower(line)
 	return strings.Contains(l, "dfu mode") ||
@@ -271,32 +304,15 @@ func isDFUReady(line string) bool {
 		strings.Contains(l, "entering recovery")
 }
 
-// fwPatchTarget maps a variant to its firmware-patch Make target.
-func fwPatchTarget(v Variant) string {
-	switch v {
-	case VariantDev:
-		return "fw_patch_dev"
-	case VariantJB:
-		return "fw_patch_jb"
-	case VariantEXP:
-		return "fw_patch_exp"
-	default:
-		return "fw_patch"
+// vmBundleDir returns the on-disk VM bundle directory. In v2, the bundle lives
+// under the library root named by the VM's name (if managed by our library) or
+// at VMDir for imported VMs.
+func (m *Manager) vmBundleDir(v VM) string {
+	candidate := filepath.Join(m.opts.VMRoot, v.Name)
+	if _, err := os.Stat(filepath.Join(candidate, "config.plist")); err == nil {
+		return candidate
 	}
-}
-
-// cfwInstallTarget maps a variant to its CFW-install Make target.
-func cfwInstallTarget(v Variant) string {
-	switch v {
-	case VariantDev:
-		return "cfw_install_dev"
-	case VariantJB:
-		return "cfw_install_jb"
-	case VariantEXP:
-		return "cfw_install_exp"
-	default:
-		return "cfw_install"
-	}
+	return v.VMDir
 }
 
 // networkModeOrDefault returns the VM's network mode, defaulting to nat.
@@ -307,7 +323,7 @@ func networkModeOrDefault(m string) string {
 	return m
 }
 
-// diskGiB converts a MiB disk size to whole GiB (the unit `make vm_new` expects),
+// diskGiB converts a MiB disk size to whole GiB (the unit vm new expects),
 // with a floor of 1 GiB.
 func diskGiB(mib int) int {
 	g := mib / 1024

@@ -39,8 +39,9 @@ const pmd3ResetPatched = `            self.device.reset()
         self._reinit(ecid=self.ecid)`
 
 // ensurePMD3Patch applies the libusb-reset patch to the pymobiledevice3 install
-// inside the vphone-cli venv if it hasn't been applied yet. Without it, the
-// restore step hangs indefinitely on macOS (see internal restore notes). Safe
+// inside the vphone-cli venv if it hasn't been applied yet. In v2, the restore
+// runs natively (VPhoneRestore) so this patch is typically a no-op. It remains
+// for backwards compatibility with older venvs that may still be present. Safe
 // to call on every startup: it is idempotent and never fatal.
 func ensurePMD3Patch(vphoneCLIDir string, log *slog.Logger) {
 	if log == nil {

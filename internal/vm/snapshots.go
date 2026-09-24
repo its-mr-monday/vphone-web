@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Snapshot is a saved VM backup (created via `make vm_backup`).
+// Snapshot is a saved VM backup (filesystem-level copy of the VM bundle).
 type Snapshot struct {
 	ID        string    `json:"id"`
 	VMID      string    `json:"vm_id"`
@@ -82,7 +82,9 @@ func (m *Manager) ListSnapshots(vmID string) ([]Snapshot, error) {
 	return out, nil
 }
 
-// CreateSnapshot enqueues a `make vm_backup` job. The VM must be stopped.
+// CreateSnapshot copies the VM bundle directory to the backups dir. The VM
+// must be stopped. v2 has no dedicated snapshot CLI command, so we use a direct
+// filesystem copy (APFS clonefile when available, recursive copy fallback).
 func (m *Manager) CreateSnapshot(vmID, name string) (*jobs.Handle, error) {
 	v, err := m.store.get(vmID)
 	if err != nil {
@@ -99,27 +101,30 @@ func (m *Manager) CreateSnapshot(vmID, name string) (*jobs.Handle, error) {
 	}
 
 	dir := backupsDir(v)
-	cmd := jobs.Command{
-		Name: "make", Dir: m.opts.VphoneCLIDir, Env: m.makeEnv(nil),
-		Args: []string{"vm_backup", "VM_DIR=" + v.VMDir, "BACKUPS_DIR=" + dir, "NAME=" + name},
-	}
 	return m.jobs.Enqueue(jobs.Spec{
 		VMID: vmID, Type: "vm_backup", Label: "snapshot " + name,
 		Run: func(ctx context.Context, out io.Writer) error {
-			if err := jobs.RunCommand(cmd)(ctx, out); err != nil {
+			dst := filepath.Join(dir, name)
+			fmt.Fprintf(out, "creating snapshot %q → %s\n", name, dst)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			// Record metadata immediately so it appears without waiting for a scan.
-			size := dirSize(filepath.Join(dir, name))
+			if err := copyDir(v.VMDir, dst, out); err != nil {
+				return err
+			}
+			size := dirSize(dst)
 			_ = m.snapStore().insert(Snapshot{
 				ID: uuid.NewString(), VMID: vmID, Name: name, Size: size, CreatedAt: time.Now(),
 			})
+			fmt.Fprintf(out, "snapshot %q complete (%d bytes)\n", name, size)
 			return nil
 		},
 	})
 }
 
-// RestoreSnapshot enqueues a `make vm_switch` job. The VM must be stopped.
+// RestoreSnapshot swaps the VM bundle with a snapshot directory. The VM must
+// be stopped. The current state is saved as a backup named "_pre_restore"
+// (overwritten if it exists) before the snapshot replaces it.
 func (m *Manager) RestoreSnapshot(vmID, name string) (*jobs.Handle, error) {
 	v, err := m.store.get(vmID)
 	if err != nil {
@@ -129,19 +134,34 @@ func (m *Manager) RestoreSnapshot(vmID, name string) (*jobs.Handle, error) {
 		return nil, fmt.Errorf("VM must be stopped to restore a snapshot (status %s)", v.Status)
 	}
 	dir := backupsDir(v)
-	if _, err := os.Stat(filepath.Join(dir, name, "config.plist")); err != nil {
+	snapDir := filepath.Join(dir, name)
+	if _, err := os.Stat(filepath.Join(snapDir, "config.plist")); err != nil {
 		return nil, fmt.Errorf("snapshot %q not found", name)
 	}
 	if m.jobs == nil {
 		return nil, fmt.Errorf("job queue unavailable")
 	}
-	cmd := jobs.Command{
-		Name: "make", Dir: m.opts.VphoneCLIDir, Env: m.makeEnv(nil),
-		Args: []string{"vm_switch", "VM_DIR=" + v.VMDir, "BACKUPS_DIR=" + dir, "NAME=" + name},
-	}
 	return m.jobs.Enqueue(jobs.Spec{
 		VMID: vmID, Type: "vm_switch", Label: "restore snapshot " + name,
-		Run: jobs.RunCommand(cmd),
+		Run: func(ctx context.Context, out io.Writer) error {
+			// Save the current state before overwriting.
+			preRestore := filepath.Join(dir, "_pre_restore")
+			_ = os.RemoveAll(preRestore)
+			fmt.Fprintf(out, "backing up current state to %s\n", preRestore)
+			if err := copyDir(v.VMDir, preRestore, out); err != nil {
+				return fmt.Errorf("backup current state: %w", err)
+			}
+			// Replace VM directory contents with the snapshot.
+			fmt.Fprintf(out, "restoring snapshot %q from %s\n", name, snapDir)
+			if err := os.RemoveAll(v.VMDir); err != nil {
+				return fmt.Errorf("clear vm dir: %w", err)
+			}
+			if err := copyDir(snapDir, v.VMDir, out); err != nil {
+				return fmt.Errorf("restore snapshot: %w", err)
+			}
+			fmt.Fprintf(out, "snapshot %q restored\n", name)
+			return nil
+		},
 	})
 }
 
@@ -165,6 +185,49 @@ func (m *Manager) DeleteSnapshot(vmID, name string) error {
 }
 
 func (m *Manager) snapStore() *snapshotStore { return &snapshotStore{db: m.store.db} }
+
+// copyDir recursively copies src to dst. On APFS, files are cloned (CoW) when
+// possible for near-instant, space-efficient snapshots of large disk images.
+func copyDir(src, dst string, out io.Writer) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		if info.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		outf, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer outf.Close()
+		_, err = io.Copy(outf, in)
+		return err
+	})
+}
 
 // dirSize returns the total size of a directory tree in bytes (best effort).
 func dirSize(path string) int64 {

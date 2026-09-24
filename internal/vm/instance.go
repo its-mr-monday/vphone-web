@@ -24,7 +24,7 @@ const (
 	StatusError      Status = "ERROR"
 )
 
-// Variant selects a firmware flavor and its corresponding Make targets.
+// Variant selects a firmware flavor and its corresponding vphone-cli pipeline.
 type Variant string
 
 const (
@@ -113,7 +113,7 @@ type VM struct {
 // only (never persisted) and guarded by its own mutex.
 type runtime struct {
 	mu  sync.Mutex
-	cmd *exec.Cmd // the vphone-cli `make boot` process
+	cmd *exec.Cmd // the vphone-cli vm launch process
 	// stopping is set when a graceful stop is in progress so the process-exit
 	// watcher does not misclassify the exit as a crash.
 	stopping bool

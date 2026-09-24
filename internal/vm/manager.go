@@ -44,7 +44,7 @@ type Manager struct {
 	store  *store
 	ports  *PortAllocator
 	jobs   *jobs.Queue
-	makeMu sync.Mutex // serializes make invocations that mutate shared CLI state
+	makeMu sync.Mutex // serializes vphone-cli invocations that mutate shared state
 
 	mu       sync.Mutex
 	runtimes map[string]*runtime // id -> live process handles (running VMs only)
@@ -119,7 +119,7 @@ var validNetworkModes = map[string]bool{"nat": true, "bridged": true, "hostOnly"
 // Create provisions a new VM. It inserts the record (status CREATING), allocates
 // ports, and launches the provisioning pipeline in the background. The VM is
 // returned immediately in CREATING; callers watch its status and the associated
-// jobs for progress. If no IPSW is given, only `make vm_new` runs and the VM
+// jobs for progress. If no IPSW is given, only `vm new` runs and the VM
 // lands in STOPPED (bare shell, not bootable until firmware is provisioned).
 func (m *Manager) Create(p CreateParams) (VM, error) {
 	name := strings.TrimSpace(p.Name)
@@ -326,7 +326,7 @@ func (m *Manager) UpdateConfig(id string, p UpdateConfigParams) (VM, error) {
 		iface = "" // interface only meaningful in bridged mode
 	}
 
-	// Rewrite the manifest so `make boot` picks up the new resources/network.
+	// Rewrite the manifest so vphone-cli picks up the new resources/network.
 	if err := m.writeManifestConfig(v.VMDir, cpu, mem, mode, iface); err != nil {
 		return VM{}, err
 	}
@@ -339,7 +339,7 @@ func (m *Manager) UpdateConfig(id string, p UpdateConfigParams) (VM, error) {
 }
 
 // writeManifestConfig patches the VM's config.plist in place: cpuCount,
-// memorySize (bytes), and networkConfig.{mode,interface}. Uses PlistBuddy
+// memorySize (bytes), and networkConfig.{mode,bridgeInterface}. Uses PlistBuddy
 // (macOS built-in). The file is written at provisioning time so it always
 // exists for a provisioned VM.
 func (m *Manager) writeManifestConfig(vmDir string, cpu, memMiB int, mode, iface string) error {
@@ -358,17 +358,18 @@ func (m *Manager) writeManifestConfig(vmDir string, cpu, memMiB int, mode, iface
 			return err
 		}
 	}
-	// The interface key is optional; set-or-add, and clear it when not bridged.
+	// The bridgeInterface key is optional; set-or-add, and clear it when not bridged.
+	// v2 uses "bridgeInterface" as the plist key (Swift Codable default).
 	if iface != "" {
-		if err := runPlistBuddy(plist, "Set :networkConfig:interface "+iface); err != nil {
+		if err := runPlistBuddy(plist, "Set :networkConfig:bridgeInterface "+iface); err != nil {
 			// Key may not exist yet — add it as a string.
-			if err2 := runPlistBuddy(plist, "Add :networkConfig:interface string "+iface); err2 != nil {
+			if err2 := runPlistBuddy(plist, "Add :networkConfig:bridgeInterface string "+iface); err2 != nil {
 				return fmt.Errorf("set network interface: %w", err2)
 			}
 		}
 	} else {
 		// Best-effort removal; ignore "does not exist" errors.
-		_ = runPlistBuddy(plist, "Delete :networkConfig:interface")
+		_ = runPlistBuddy(plist, "Delete :networkConfig:bridgeInterface")
 	}
 	return nil
 }
@@ -554,9 +555,9 @@ func bootable(vmDir string) bool {
 	return err == nil
 }
 
-// Boot starts a VM by running `make boot` in the vphone-cli directory with
-// VM_DIR set to the VM's directory. It tracks the process, wires up usbmux
-// tunnels, and supervises the process. The concurrent-VM limit is enforced.
+// Boot starts a VM by running `vphone-cli vm launch` for the VM. It tracks the
+// process, wires up usbmux tunnels, and supervises the process. The
+// concurrent-VM limit is enforced.
 func (m *Manager) Boot(id string) (VM, error) {
 	v, err := m.store.get(id)
 	if err != nil {
@@ -610,19 +611,21 @@ func (m *Manager) realBoot(v VM) error {
 
 	rt := &runtime{tail: newRingLog(200)}
 
-	bootArgs := []string{"boot", "VM_DIR=" + v.VMDir}
+	// v2: vphone-cli vm launch <name> [--headless] --library-root <root>
+	bootArgs := []string{"vm", "launch", v.Name}
 	if m.opts.HeadlessVMs {
-		bootArgs = append(bootArgs, "HEADLESS=1")
+		bootArgs = append(bootArgs, "--headless")
 	}
-	cmd := exec.Command("make", bootArgs...)
+	bootArgs = append(bootArgs, "--library-root", m.opts.VMRoot)
+	cmd := exec.Command(m.cliPath(), bootArgs...)
 	cmd.Dir = m.opts.VphoneCLIDir
-	cmd.Env = m.makeEnv(nil)
+	cmd.Env = m.cliEnv(nil)
 	cmd.Stdout = rt.tail
 	cmd.Stderr = rt.tail
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start `make boot`: %w", err)
+		return fmt.Errorf("start vphone-cli vm launch: %w", err)
 	}
 	rt.cmd = cmd
 
@@ -653,28 +656,10 @@ func (m *Manager) realBoot(v VM) error {
 	return nil
 }
 
-// makeEnv builds the environment for vphone-cli make invocations, prepending the
-// CLI's venv and tools bin dirs (so pymobiledevice3, aria2c, trustcache resolve)
-// and layering any extra KEY=VALUE entries.
+// makeEnv builds the environment for vphone-cli invocations. Delegates to
+// cliEnv (provision.go) which prepends the CLI binary, venv, and tools dirs.
 func (m *Manager) makeEnv(extra []string) []string {
-	env := os.Environ()
-	prepend := strings.Join([]string{
-		filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin"),
-		filepath.Join(m.opts.VphoneCLIDir, ".tools", "bin"),
-		filepath.Join(m.opts.VphoneCLIDir, ".build", "release"),
-	}, string(os.PathListSeparator))
-	found := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + prepend + string(os.PathListSeparator) + strings.TrimPrefix(e, "PATH=")
-			found = true
-			break
-		}
-	}
-	if !found {
-		env = append(env, "PATH="+prepend)
-	}
-	return append(env, extra...)
+	return m.cliEnv(extra)
 }
 
 // startTunnels launches resilient usbmux forward supervisors mapping host ports

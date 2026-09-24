@@ -2,24 +2,14 @@ package vm
 
 import "testing"
 
-func TestVariantTargetMapping(t *testing.T) {
-	cases := []struct {
-		variant Variant
-		fwPatch string
-		cfw     string
-	}{
-		{VariantRegular, "fw_patch", "cfw_install"},
-		{VariantDev, "fw_patch_dev", "cfw_install_dev"},
-		{VariantJB, "fw_patch_jb", "cfw_install_jb"},
-		{VariantEXP, "fw_patch_exp", "cfw_install_exp"},
+func TestValidVariants(t *testing.T) {
+	for _, v := range []Variant{VariantRegular, VariantDev, VariantJB, VariantEXP} {
+		if !validVariants[v] {
+			t.Errorf("expected %q to be a valid variant", v)
+		}
 	}
-	for _, c := range cases {
-		if got := fwPatchTarget(c.variant); got != c.fwPatch {
-			t.Errorf("%s fwPatchTarget = %q, want %q", c.variant, got, c.fwPatch)
-		}
-		if got := cfwInstallTarget(c.variant); got != c.cfw {
-			t.Errorf("%s cfwInstallTarget = %q, want %q", c.variant, got, c.cfw)
-		}
+	if validVariants["bogus"] {
+		t.Error("expected 'bogus' to be invalid")
 	}
 }
 
