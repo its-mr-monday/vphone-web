@@ -1,5 +1,5 @@
 [submodule "vphone-cli"]
 	path = vphone-cli
 	url = https://github.com/its-mr-monday/vphone-cli
-	branch = cyberm-enhancements
+	branch = cyberm-version
 	update = rebase

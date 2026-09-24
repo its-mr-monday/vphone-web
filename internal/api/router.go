@@ -89,6 +89,7 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 				r.With(user, remote).Post("/boot", s.bootVM)
 				r.With(user, remote).Post("/stop", s.stopVM)
 				r.With(user, remote).Post("/restart", s.restartVM)
+				r.With(admin, remote).Post("/reprovision", s.reprovisionVM)
 				r.With(user, remote).Get("/vnc", s.vncWS)
 				r.With(user, remote).Get("/terminal", s.terminalWS)
 				r.With(user, remote).Get("/info", s.guestInfo)

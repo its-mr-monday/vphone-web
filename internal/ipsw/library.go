@@ -125,6 +125,31 @@ func (l *Library) PathOf(id string) (string, error) {
 	return it.FilePath, nil
 }
 
+// LatestCloudOSPath returns the file path of the newest ready cloudOS IPSW, or
+// "" if none is available.
+func (l *Library) LatestCloudOSPath() string {
+	items, err := l.store.list()
+	if err != nil {
+		return ""
+	}
+	var best IPSW
+	for _, it := range items {
+		if it.Kind != KindCloudOS {
+			continue
+		}
+		if it.Status != StatusReady && it.Status != StatusRegistered {
+			continue
+		}
+		if _, err := os.Stat(it.FilePath); err != nil {
+			continue
+		}
+		if best.ID == "" || it.CreatedAt.After(best.CreatedAt) {
+			best = it
+		}
+	}
+	return best.FilePath
+}
+
 func (l *Library) isManaged(path string) bool {
 	rel, err := filepath.Rel(l.dir, path)
 	return err == nil && !strings.HasPrefix(rel, "..")

@@ -262,6 +262,35 @@ func (s *Server) stopVM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+type reprovisionVMRequest struct {
+	IPSWID        string `json:"ipsw_id"`
+	CloudOSIPSWID string `json:"cloudos_ipsw_id"`
+}
+
+func (s *Server) reprovisionVM(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req reprovisionVMRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	v, err := s.vms.Reprovision(id, vm.ReprovisionParams{
+		IPSWID:        req.IPSWID,
+		CloudOSIPSWID: req.CloudOSIPSWID,
+	})
+	if errors.Is(err, vm.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, v)
+}
+
 // restartVM handles POST /api/v1/vms/:id/restart.
 func (s *Server) restartVM(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

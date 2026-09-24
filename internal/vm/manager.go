@@ -33,7 +33,10 @@ type Options struct {
 	// IPSWPath resolves an IPSW id to its file path on disk. Provided by the
 	// ipsw library; may be nil if provisioning is disabled.
 	IPSWPath func(id string) (string, error)
-	Logger   *slog.Logger
+	// LatestCloudOSPath returns the path of the newest ready cloudOS IPSW, or
+	// "". Used to auto-select a cloudOS source when none is specified.
+	LatestCloudOSPath func() string
+	Logger            *slog.Logger
 }
 
 // Manager owns the lifecycle of all VMs: persistence, port allocation, the
@@ -213,6 +216,68 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	go m.provision(v, ipswPath, cloudosPath)
 
 	return v, nil
+}
+
+// ReprovisionParams controls what the re-provision pipeline does.
+type ReprovisionParams struct {
+	IPSWID        string // if empty, reuse the VM's stored ipsw_id
+	CloudOSIPSWID string
+}
+
+// Reprovision re-runs the provisioning pipeline on an existing VM. The VM must
+// be STOPPED or ERROR. The existing VM directory is wiped and recreated from
+// scratch. The DB record and port allocation are preserved.
+func (m *Manager) Reprovision(id string, p ReprovisionParams) (VM, error) {
+	v, err := m.store.get(id)
+	if err != nil {
+		return VM{}, err
+	}
+	if v.Status != StatusStopped && v.Status != StatusError {
+		return VM{}, fmt.Errorf("vm %s must be stopped or errored to re-provision (current: %s)", v.Name, v.Status)
+	}
+
+	ipswID := p.IPSWID
+	if ipswID == "" {
+		ipswID = v.IPSWID
+	}
+	if ipswID == "" {
+		return VM{}, fmt.Errorf("no IPSW specified and VM has no stored IPSW reference")
+	}
+
+	if m.opts.IPSWPath == nil {
+		return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
+	}
+	ipswPath, err := m.opts.IPSWPath(ipswID)
+	if err != nil {
+		return VM{}, fmt.Errorf("resolve IPSW %s: %w", ipswID, err)
+	}
+	var cloudosPath string
+	if p.CloudOSIPSWID != "" {
+		cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+		if err != nil {
+			return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+		}
+	}
+
+	if err := os.RemoveAll(v.VMDir); err != nil {
+		m.log.Warn("wipe vm dir failed", "dir", v.VMDir, "err", err)
+	}
+	if err := os.MkdirAll(v.VMDir, 0o755); err != nil {
+		return VM{}, fmt.Errorf("recreate vm dir: %w", err)
+	}
+
+	if err := m.store.updateStatus(id, StatusCreating, "", time.Now()); err != nil {
+		return VM{}, err
+	}
+	v.Status = StatusCreating
+	if ipswID != v.IPSWID {
+		_ = m.store.setIPSW(id, ipswID, time.Now())
+	}
+
+	m.log.Info("re-provisioning vm", "id", id, "name", v.Name, "ipsw", ipswID)
+	go m.provision(v, ipswPath, cloudosPath)
+
+	return m.store.get(id)
 }
 
 // SetFridaPort sets the host port that forwards to the guest's frida-server.
