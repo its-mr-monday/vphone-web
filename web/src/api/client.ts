@@ -238,6 +238,8 @@ export const api = {
   bootVM: (id: string) => request<VM>(`/vms/${id}/boot`, { method: "POST" }),
   stopVM: (id: string) => request<VM>(`/vms/${id}/stop`, { method: "POST" }),
   restartVM: (id: string) => request<VM>(`/vms/${id}/restart`, { method: "POST" }),
+  reprovisionVM: (id: string, body?: { ipsw_id?: string; cloudos_ipsw_id?: string }) =>
+    request<VM>(`/vms/${id}/reprovision`, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
 
   // Control
   touch: (id: string, body: { type?: "tap" | "swipe"; x: number; y: number; x2?: number; y2?: number; ms?: number }) =>

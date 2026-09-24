@@ -33,7 +33,10 @@ type Options struct {
 	// IPSWPath resolves an IPSW id to its file path on disk. Provided by the
 	// ipsw library; may be nil if provisioning is disabled.
 	IPSWPath func(id string) (string, error)
-	Logger   *slog.Logger
+	// LatestCloudOSPath returns the path of the newest ready cloudOS IPSW, or
+	// "". Used to auto-select a cloudOS source when none is specified.
+	LatestCloudOSPath func() string
+	Logger            *slog.Logger
 }
 
 // Manager owns the lifecycle of all VMs: persistence, port allocation, the
@@ -213,6 +216,75 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	go m.provision(v, ipswPath, cloudosPath)
 
 	return v, nil
+}
+
+// ReprovisionParams controls what the re-provision pipeline does.
+type ReprovisionParams struct {
+	IPSWID        string // if empty, reuse the VM's stored ipsw_id
+	CloudOSIPSWID string
+}
+
+// Reprovision re-runs the provisioning pipeline on an existing VM. The VM must
+// be STOPPED or ERROR. The existing VM directory is wiped and recreated from
+// scratch (vm_new → fw_prepare → fw_patch → restore → cfw_install). The DB
+// record and port allocation are preserved.
+func (m *Manager) Reprovision(id string, p ReprovisionParams) (VM, error) {
+	v, err := m.store.get(id)
+	if err != nil {
+		return VM{}, err
+	}
+	if v.Status != StatusStopped && v.Status != StatusError {
+		return VM{}, fmt.Errorf("vm %s must be stopped or errored to re-provision (current: %s)", v.Name, v.Status)
+	}
+
+	ipswID := p.IPSWID
+	if ipswID == "" {
+		ipswID = v.IPSWID
+	}
+	if ipswID == "" {
+		return VM{}, fmt.Errorf("no IPSW specified and VM has no stored IPSW reference")
+	}
+
+	if m.opts.IPSWPath == nil {
+		return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
+	}
+	ipswPath, err := m.opts.IPSWPath(ipswID)
+	if err != nil {
+		return VM{}, fmt.Errorf("resolve IPSW %s: %w", ipswID, err)
+	}
+	var cloudosPath string
+	if p.CloudOSIPSWID != "" {
+		cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+		if err != nil {
+			return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+		}
+	}
+
+	// Wipe VM directories so vm_new starts clean. vphone-cli creates the VM
+	// under library-root/<name>, which may differ from the DB's VMDir (a UUID
+	// path). Remove both.
+	namedDir := filepath.Join(m.opts.VMRoot, v.Name)
+	for _, dir := range []string{v.VMDir, namedDir} {
+		if dir == "" {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			m.log.Warn("wipe dir failed", "dir", dir, "err", err)
+		}
+	}
+
+	if err := m.store.updateStatus(id, StatusCreating, "", time.Now()); err != nil {
+		return VM{}, err
+	}
+	v.Status = StatusCreating
+	if ipswID != v.IPSWID {
+		_ = m.store.setIPSW(id, ipswID, time.Now())
+	}
+
+	m.log.Info("re-provisioning vm", "id", id, "name", v.Name, "ipsw", ipswID)
+	go m.provision(v, ipswPath, cloudosPath)
+
+	return m.store.get(id)
 }
 
 // SetFridaPort sets the host port that forwards to the guest's frida-server.
@@ -611,11 +683,12 @@ func (m *Manager) realBoot(v VM) error {
 
 	rt := &runtime{tail: newRingLog(200)}
 
-	// v2: vphone-cli vm launch <name> [--headless] --library-root <root>
+	// v2: vphone-cli vm launch <name> [--headless] [--api-listen] --library-root <root>
 	bootArgs := []string{"vm", "launch", v.Name}
 	if m.opts.HeadlessVMs {
 		bootArgs = append(bootArgs, "--headless")
 	}
+	bootArgs = append(bootArgs, "--api-listen", fmt.Sprintf("127.0.0.1:%d", v.Ports.API))
 	bootArgs = append(bootArgs, "--library-root", m.opts.VMRoot)
 	cmd := exec.Command(m.cliPath(), bootArgs...)
 	cmd.Dir = m.opts.VphoneCLIDir

@@ -14,6 +14,7 @@ const (
 	offsetSSH2  = 2 // secondary SSH  (forwards VM :22222)
 	offsetRPC   = 3 // RPC channel    (forwards VM :5910)
 	offsetFrida = 4 // Frida server   (forwards VM :27042)
+	offsetAPI   = 5 // vphoned HTTP/WebSocket API (VSOCK proxy)
 )
 
 // PortBlock describes the concrete host ports assigned to a single VM.
@@ -24,6 +25,7 @@ type PortBlock struct {
 	SSH2  int `json:"ssh2"`
 	RPC   int `json:"rpc"`
 	Frida int `json:"frida"`
+	API   int `json:"api"`
 }
 
 // blockFor derives the service ports for a given block base.
@@ -35,6 +37,7 @@ func blockFor(base int) PortBlock {
 		SSH2:  base + offsetSSH2,
 		RPC:   base + offsetRPC,
 		Frida: base + offsetFrida,
+		API:   base + offsetAPI,
 	}
 }
 

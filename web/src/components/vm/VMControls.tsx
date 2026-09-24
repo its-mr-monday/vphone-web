@@ -1,4 +1,4 @@
-import { Play, Square, RotateCw, Trash2, Download } from "lucide-react";
+import { Play, Square, RotateCw, Trash2, Download, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, type VM } from "../../api/client";
 import { useBootVM, useStopVM } from "../../hooks/useVM";
@@ -16,17 +16,20 @@ export function VMControls({ vm }: { vm: VM }) {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
+  const [reprovisioning, setReprovisioning] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const busy =
     boot.isPending ||
     stop.isPending ||
     restarting ||
+    reprovisioning ||
     vm.status === "BOOTING" ||
     vm.status === "STOPPING" ||
     vm.status === "DELETING";
 
   const isRunning = vm.status === "RUNNING";
+  const canReprovision = (vm.status === "STOPPED" || vm.status === "ERROR") && isAdmin;
 
   async function guard(fn: () => Promise<unknown>) {
     setError(null);
@@ -76,6 +79,26 @@ export function VMControls({ vm }: { vm: VM }) {
       >
         Restart
       </Button>
+
+      {canReprovision && (
+        <Button
+          variant="primary"
+          icon={<RefreshCw className="h-3.5 w-3.5" />}
+          disabled={busy}
+          onClick={() =>
+            guard(async () => {
+              setReprovisioning(true);
+              try {
+                await api.reprovisionVM(vm.id);
+              } finally {
+                setReprovisioning(false);
+              }
+            })
+          }
+        >
+          Re-provision
+        </Button>
+      )}
 
       {isAdmin && vm.status === "STOPPED" && (
         <a href={api.exportVMURL(vm.id)} download>

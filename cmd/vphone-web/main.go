@@ -63,6 +63,10 @@ func main() {
 }
 
 func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error {
+	if os.Geteuid() != 0 {
+		logger.Warn("vphone-web should run as root; cfw install will fail without it")
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -107,8 +111,9 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		MaxConcurrentVMs: cfg.Limits.MaxConcurrentVMs,
 		HeadlessVMs:      cfg.Server.HeadlessVMs,
 		Jobs:             queue,
-		IPSWPath:         library.PathOf,
-		Logger:           logger,
+		IPSWPath:          library.PathOf,
+		LatestCloudOSPath: library.LatestCloudOSPath,
+		Logger:            logger,
 	})
 	if err != nil {
 		return err

@@ -49,6 +49,14 @@ func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	}
 
 	// Step 2 — download/extract/merge firmware from the chosen IPSW(s).
+	// v2 requires --cloudos-source in non-interactive mode. Auto-select from
+	// the library if the caller didn't specify one.
+	if cloudosPath == "" && m.opts.LatestCloudOSPath != nil {
+		cloudosPath = m.opts.LatestCloudOSPath()
+		if cloudosPath != "" {
+			m.log.Info("auto-selected cloudOS IPSW", "vm", v.ID, "path", cloudosPath)
+		}
+	}
 	fwArgs := []string{"fw", "prepare", v.Name, "--iphone-source", ipswPath}
 	if cloudosPath != "" {
 		fwArgs = append(fwArgs, "--cloudos-source", cloudosPath)
@@ -74,7 +82,15 @@ func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 		return
 	}
 
+	// Wait for the Virtualization.framework XPC service to fully release the
+	// disk after the DFU boot is killed. The process group kill terminates
+	// vphone-cli and vphone-vm, but the XPC service (com.apple.Virtualization.
+	// VirtualMachine) may hold the file descriptor briefly after.
+	m.waitDiskFree(v)
+
 	// Step 5 — install CFW offline (VM stopped), status INSTALLING_CFW.
+	// cfw install mounts Disk.img via hdiutil and writes to the system volume,
+	// which requires root. The server must run as root (see README).
 	_ = m.store.updateStatus(v.ID, StatusInstalling, "", time.Now())
 	if err := m.runStep(v, "cfw_install", "cfw_install", m.cliRunFunc(
 		"cfw", "install", v.Name,
@@ -87,10 +103,40 @@ func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	m.log.Info("vm provisioning complete", "vm", v.ID, "name", v.Name)
 }
 
+// stepTimeout returns the maximum duration for a provisioning step. These are
+// generous ceilings to catch genuine hangs; normal runs finish well within.
+func stepTimeout(jobType string) time.Duration {
+	switch jobType {
+	case "vm_new":
+		return 5 * time.Minute
+	case "fw_prepare":
+		return 90 * time.Minute // may download 10 GB firmware
+	case "fw_patch":
+		return 30 * time.Minute
+	case "restore":
+		return 60 * time.Minute
+	case "cfw_install":
+		return 30 * time.Minute
+	default:
+		return 60 * time.Minute
+	}
+}
+
+// withTimeout wraps a RunFunc so its context carries a deadline.
+func withTimeout(timeout time.Duration, run jobs.RunFunc) jobs.RunFunc {
+	return func(ctx context.Context, out io.Writer) error {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return run(ctx, out)
+	}
+}
+
 // runStep enqueues a job for the VM and blocks until it reaches a terminal
-// state, returning an error if it did not complete successfully.
+// state, returning an error if it did not complete successfully. Each step
+// gets a timeout so a hung subprocess cannot block the pipeline forever.
 func (m *Manager) runStep(v VM, jobType, label string, run jobs.RunFunc) error {
-	h, err := m.jobs.Enqueue(jobs.Spec{VMID: v.ID, Type: jobType, Label: label, Run: run})
+	wrapped := withTimeout(stepTimeout(jobType), run)
+	h, err := m.jobs.Enqueue(jobs.Spec{VMID: v.ID, Type: jobType, Label: label, Run: wrapped})
 	if err != nil {
 		return err
 	}
@@ -116,6 +162,66 @@ func (m *Manager) failStep(id, step string, err error) {
 
 func (m *Manager) markError(id, msg string) {
 	_ = m.store.updateStatus(id, StatusError, msg, time.Now())
+}
+
+// waitDiskFree ensures the VM's Disk.img is not held by any process before
+// cfw_install runs. The Virtualization.framework XPC service
+// (com.apple.Virtualization.VirtualMachine) can outlive vphone-vm by 30s+.
+// Strategy: poll lsof for 15s, then actively kill any XPC service holding the
+// file, then poll another 15s.
+func (m *Manager) waitDiskFree(v VM) {
+	disk := filepath.Join(m.opts.VMRoot, v.Name, "Disk.img")
+
+	for i := 0; i < 15; i++ {
+		if !m.diskHeld(disk) {
+			return
+		}
+		m.log.Debug("waiting for disk release", "vm", v.ID, "attempt", i+1)
+		time.Sleep(time.Second)
+	}
+
+	// Still held — kill Virtualization XPC services that hold this file.
+	m.killDiskHolders(v, disk)
+
+	for i := 0; i < 15; i++ {
+		if !m.diskHeld(disk) {
+			m.log.Info("disk released after killing XPC services", "vm", v.ID)
+			return
+		}
+		m.log.Debug("waiting for disk release post-kill", "vm", v.ID, "attempt", i+1)
+		time.Sleep(time.Second)
+	}
+	m.log.Warn("disk still held after kill+30s; proceeding anyway", "vm", v.ID)
+}
+
+// diskHeld returns true if any process has the file open.
+func (m *Manager) diskHeld(path string) bool {
+	out, err := exec.Command("/usr/sbin/lsof", path).Output()
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
+}
+
+// killDiskHolders finds and kills Virtualization.framework XPC services
+// holding the VM's disk image.
+func (m *Manager) killDiskHolders(v VM, disk string) {
+	out, err := exec.Command("/usr/sbin/lsof", "-t", disk).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || pid <= 1 {
+			continue
+		}
+		// Only kill Virtualization XPC services, not random processes.
+		ps, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+		cmd := strings.TrimSpace(string(ps))
+		if strings.Contains(cmd, "com.apple.Virtualization") {
+			m.log.Info("killing Virtualization XPC service holding disk", "vm", v.ID, "pid", pid)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		} else {
+			m.log.Warn("non-XPC process holds disk; not killing", "vm", v.ID, "pid", pid, "cmd", cmd)
+		}
+	}
 }
 
 // cliPath returns the absolute path to the vphone-cli binary. It checks
