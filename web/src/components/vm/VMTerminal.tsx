@@ -65,7 +65,6 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
 
       ws.onopen = () => {
         attempt = 0;
-        // Send the current terminal size so the remote PTY matches xterm.
         sendResize();
       };
       ws.onmessage = (ev) => {
@@ -76,7 +75,7 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
         }
       };
       ws.onclose = () => {
-        wsRef.current = null;
+        if (wsRef.current === ws) wsRef.current = null;
         if (closedByUs) return;
         attempt += 1;
         term.writeln(`\x1b[33m[disconnected — reconnecting…]\x1b[0m`);

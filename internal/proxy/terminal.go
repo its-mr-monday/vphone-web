@@ -115,23 +115,27 @@ func Terminal(w http.ResponseWriter, r *http.Request, cfg TerminalConfig, log *s
 	}
 
 	// SSH stdout/stderr -> WebSocket (binary frames).
-	pump := func(src io.Reader) {
+	pump := func(name string, src io.Reader) {
 		defer closeAll()
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := src.Read(buf)
 			if n > 0 {
 				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					log.Debug("terminal ws write failed", "pipe", name, "err", werr)
 					return
 				}
 			}
 			if err != nil {
+				if err != io.EOF {
+					log.Debug("terminal pipe read ended", "pipe", name, "err", err)
+				}
 				return
 			}
 		}
 	}
-	go pump(stdout)
-	go pump(stderr)
+	go pump("stdout", stdout)
+	go pump("stderr", stderr)
 
 	// WebSocket -> SSH stdin (+ handle resize control frames).
 	go func() {
@@ -156,7 +160,13 @@ func Terminal(w http.ResponseWriter, r *http.Request, cfg TerminalConfig, log *s
 	}()
 
 	// Wait for the session to end or a pipe to close.
-	go func() { session.Wait(); closeAll() }()
+	go func() {
+		err := session.Wait()
+		if err != nil {
+			log.Debug("terminal session exited", "addr", cfg.Addr, "err", err)
+		}
+		closeAll()
+	}()
 	<-done
 	log.Info("terminal closed", "addr", cfg.Addr, "client", r.RemoteAddr)
 }
