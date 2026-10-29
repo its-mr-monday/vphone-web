@@ -166,7 +166,7 @@ func (m *Manager) CreateSnapshot(vmID, name string) (*jobs.Handle, error) {
 		VMID: vmID, Type: "vm_snapshot", Label: "snapshot " + name,
 		Run: func(ctx context.Context, out io.Writer) error {
 			_, err := m.launchpad.Exec(ctx, []string{
-				"vm", "snapshot", "create", v.LaunchpadName, name, "--force",
+				"vm", "snapshot", "create", v.LaunchpadName, name,
 			}, out)
 			return err
 		},
@@ -193,7 +193,7 @@ func (m *Manager) RestoreSnapshot(vmID, name string) (*jobs.Handle, error) {
 		VMID: vmID, Type: "vm_snapshot_restore", Label: "restore snapshot " + name,
 		Run: func(ctx context.Context, out io.Writer) error {
 			_, err := m.launchpad.Exec(ctx, []string{
-				"vm", "snapshot", "revert", v.LaunchpadName, name, "--force",
+				"vm", "snapshot", "revert", v.LaunchpadName, name,
 			}, out)
 			return err
 		},
@@ -214,7 +214,7 @@ func (m *Manager) DeleteSnapshot(vmID, name string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_, err := m.launchpad.Exec(ctx, []string{
-			"vm", "snapshot", "delete", v.LaunchpadName, name, "--force",
+			"vm", "snapshot", "delete", v.LaunchpadName, name,
 		}, nil)
 		if err != nil {
 			return fmt.Errorf("delete snapshot: %w", err)

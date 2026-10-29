@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
+	"github.com/cyberm-tech/vphone-web/internal/proxy"
 	"github.com/cyberm-tech/vphone-web/internal/upstream"
 	"github.com/google/uuid"
 )
@@ -59,6 +60,7 @@ type Manager struct {
 
 	mu       sync.Mutex
 	runtimes map[string]*runtime // id -> live state (running VMs only)
+	tcpFwd   *proxy.PortForwarder
 }
 
 var nameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -80,6 +82,7 @@ func NewManager(sqlDB *sql.DB, opts Options) (*Manager, error) {
 		ports:    NewPortAllocator(opts.PortBase, opts.PortBlockSize),
 		jobs:     opts.Jobs,
 		runtimes: make(map[string]*runtime),
+		tcpFwd:   proxy.NewPortForwarder(opts.Logger),
 	}
 
 	// Create the launchpad wrapper for upstream v2 VM management.
@@ -840,6 +843,54 @@ func (m *Manager) postBootServices(v VM) {
 	} else {
 		m.log.Info("auto-started TrollVNC", "vm", v.ID)
 	}
+
+	// Start TCP forwards for Frida if it's running.
+	m.startTCPForwards(v, client)
+}
+
+// startTCPForwards sets up host TCP listeners that tunnel to guest services
+// (Frida, SSH) through the vphoned WebSocket API. This lets host-side tools
+// like frida-ps connect directly.
+func (m *Manager) startTCPForwards(v VM, client *upstream.Client) {
+	ports := v.Ports
+
+	m.mu.Lock()
+	rt := m.runtimes[v.ID]
+	m.mu.Unlock()
+	if rt == nil {
+		return
+	}
+	rt.mu.Lock()
+	apiBase := fmt.Sprintf("http://%s:%d", m.apiListenHost(), rt.apiPort)
+	apiToken := rt.apiToken
+	rt.mu.Unlock()
+
+	// Frida: host:fridaPort → guest:27042
+	if ports.Frida > 0 {
+		addr := fmt.Sprintf("127.0.0.1:%d", ports.Frida)
+		if err := m.tcpFwd.Start(addr, apiBase, apiToken, 27042); err != nil {
+			m.log.Warn("frida tcp forward failed", "vm", v.ID, "addr", addr, "err", err)
+		} else {
+			m.log.Info("frida tcp forward started", "vm", v.ID, "host_port", ports.Frida)
+		}
+	}
+
+	// SSH: host:sshPort → guest:22
+	if ports.SSH > 0 {
+		addr := fmt.Sprintf("127.0.0.1:%d", ports.SSH)
+		if err := m.tcpFwd.Start(addr, apiBase, apiToken, 22); err != nil {
+			m.log.Warn("ssh tcp forward failed", "vm", v.ID, "addr", addr, "err", err)
+		} else {
+			m.log.Info("ssh tcp forward started", "vm", v.ID, "host_port", ports.SSH)
+		}
+	}
+}
+
+func (m *Manager) apiListenHost() string {
+	if m.opts.APIListenHost != "" {
+		return m.opts.APIListenHost
+	}
+	return "127.0.0.1"
 }
 
 // parseAPIPortFromAddr extracts the port from an address like "http://127.0.0.1:8765".
@@ -1055,6 +1106,15 @@ func (m *Manager) Stop(id string) error {
 		}
 	}
 
+	// Tear down TCP forwards for this VM.
+	ports := v.Ports
+	if ports.Frida > 0 {
+		m.tcpFwd.Stop(fmt.Sprintf("127.0.0.1:%d", ports.Frida))
+	}
+	if ports.SSH > 0 {
+		m.tcpFwd.Stop(fmt.Sprintf("127.0.0.1:%d", ports.SSH))
+	}
+
 	// Clean up runtime state.
 	m.mu.Lock()
 	delete(m.runtimes, id)
@@ -1120,6 +1180,9 @@ func (m *Manager) Shutdown() {
 			}
 		}
 	}
+
+	// Tear down all TCP forwards.
+	m.tcpFwd.StopAll()
 }
 
 // networkModeOrDefault returns the VM's network mode, defaulting to nat.
