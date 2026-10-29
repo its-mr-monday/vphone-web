@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Cpu, HardDrive, MemoryStick, Server } from "lucide-react";
 import type { VM } from "../../api/client";
 import { StatusDot } from "../ui/StatusDot";
+import { deviceName } from "../../lib/devices";
 
 /** Summary card for a VM in the dashboard grid. */
 export function VMCard({ vm }: { vm: VM }) {
@@ -43,9 +44,12 @@ export function VMCard({ vm }: { vm: VM }) {
       </div>
 
       <div className="flex items-center justify-between border-t border-border pt-2 font-mono text-[10px] text-fg-dim">
-        <span>vnc :{vm.ports.vnc}</span>
-        <span>ssh :{vm.ports.ssh}</span>
-        <span>rpc :{vm.ports.rpc}</span>
+        {vm.device_type ? (
+          <span>{deviceName(vm.device_type)}</span>
+        ) : (
+          <span>{vm.variant}</span>
+        )}
+        <span>{vm.ios_version || "no firmware"}</span>
       </div>
     </Link>
   );

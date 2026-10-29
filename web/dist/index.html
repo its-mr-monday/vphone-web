@@ -1,3 +1,26 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8" /><title>vphone-web</title></head>
-<body><p>Frontend not built. Run <code>make build</code> or <code>make dev</code>.</p></body></html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>vphone-web</title>
+    <meta name="color-scheme" content="light dark" />
+    <!-- Apply the saved theme before paint to avoid a flash (defaults to dark). -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("vphone-theme");
+          document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-DiThaRkq.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BXH0SIpe.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

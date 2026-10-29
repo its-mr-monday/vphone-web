@@ -17,13 +17,14 @@ import (
 
 // Config is the fully-resolved server configuration.
 type Config struct {
-	Server ServerConfig `toml:"server"`
-	Paths  PathsConfig  `toml:"paths"`
-	Ports  PortsConfig  `toml:"ports"`
-	Limits  LimitsConfig  `toml:"limits"`
-	Guest   GuestConfig   `toml:"guest"`
-	Auth    AuthConfig    `toml:"auth"`
-	Cluster ClusterConfig `toml:"cluster"`
+	Server   ServerConfig   `toml:"server"`
+	Paths    PathsConfig    `toml:"paths"`
+	Ports    PortsConfig    `toml:"ports"`
+	Limits   LimitsConfig   `toml:"limits"`
+	Guest    GuestConfig    `toml:"guest"`
+	Auth     AuthConfig     `toml:"auth"`
+	Cluster  ClusterConfig  `toml:"cluster"`
+	Upstream UpstreamConfig `toml:"upstream"`
 }
 
 // ClusterConfig controls the clustering control link. The system password is the
@@ -79,6 +80,11 @@ type SAMLConfig struct {
 	ACSURL         string `toml:"acs_url"`
 }
 
+// UpstreamConfig holds settings for the per-VM upstream vphone-cli API.
+type UpstreamConfig struct {
+	APIListenHost string `toml:"api_listen_host"`
+}
+
 // GuestConfig holds credentials/settings for talking to booted guest VMs.
 type GuestConfig struct {
 	// VNCPassword is the RFB password the guest TrollVNC server requires.
@@ -116,9 +122,10 @@ func (s ServerConfig) UseSelfSignedTLS() bool {
 
 // PathsConfig holds filesystem locations.
 type PathsConfig struct {
-	VphoneCLI string `toml:"vphone_cli"`
-	VMRoot    string `toml:"vm_root"`
-	IPSWDir   string `toml:"ipsw_dir"`
+	VphoneCLI    string `toml:"vphone_cli"`
+	VMRoot       string `toml:"vm_root"`
+	IPSWDir      string `toml:"ipsw_dir"`
+	LaunchpadCLI string `toml:"launchpad_cli"`
 	// DataDir holds the SQLite database and other server state.
 	DataDir string `toml:"data_dir"`
 }
@@ -145,10 +152,11 @@ func Default() Config {
 			DevProxy: "",
 		},
 		Paths: PathsConfig{
-			VphoneCLI: "./vphone-cli",
-			VMRoot:    "~/.vphone-web/vms",
-			IPSWDir:   "~/.vphone-web/ipsws",
-			DataDir:   "~/.vphone-web",
+			VphoneCLI:    "./vphone-cli",
+			VMRoot:       "~/.vphone-web/vms",
+			IPSWDir:      "~/.vphone-web/ipsws",
+			LaunchpadCLI: "/Applications/vphone-launchpad.app/Contents/MacOS/vphone-launchpad-cli",
+			DataDir:      "~/.vphone-web",
 		},
 		Ports: PortsConfig{
 			Base:      10000,
@@ -167,6 +175,9 @@ func Default() Config {
 			Enabled:     false,
 			SessionTTL:  "12h",
 			DefaultRole: "vphone-user",
+		},
+		Upstream: UpstreamConfig{
+			APIListenHost: "127.0.0.1",
 		},
 	}
 }
@@ -275,6 +286,12 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("VPHONE_WEB_DATA_DIR"); v != "" {
 		c.Paths.DataDir = v
 	}
+	if v := os.Getenv("VPHONE_WEB_LAUNCHPAD_CLI"); v != "" {
+		c.Paths.LaunchpadCLI = v
+	}
+	if v := os.Getenv("VPHONE_WEB_UPSTREAM_API_LISTEN_HOST"); v != "" {
+		c.Upstream.APIListenHost = v
+	}
 	// The cluster system password is conventionally set via env / .env.
 	if v := os.Getenv("VPHONE_SYSTEM_PASSWORD"); v != "" {
 		c.Cluster.SystemPassword = v
@@ -283,7 +300,7 @@ func (c *Config) applyEnvOverrides() {
 
 // expandPaths turns ~-prefixed and relative paths into absolute paths.
 func (c *Config) expandPaths() error {
-	for _, p := range []*string{&c.Paths.VphoneCLI, &c.Paths.VMRoot, &c.Paths.IPSWDir, &c.Paths.DataDir, &c.Server.TLSCert, &c.Server.TLSKey} {
+	for _, p := range []*string{&c.Paths.VphoneCLI, &c.Paths.VMRoot, &c.Paths.IPSWDir, &c.Paths.LaunchpadCLI, &c.Paths.DataDir, &c.Server.TLSCert, &c.Server.TLSKey} {
 		expanded, err := expandPath(*p)
 		if err != nil {
 			return err

@@ -62,7 +62,7 @@ export function DeleteVMDialog({ vm, onClose, onDeleted }: { vm: VM; onClose: ()
                 Permanently destroy <span className="text-fg">{vm.name}</span>? This will:
               </p>
               <ul className="space-y-1 font-mono text-[11px] text-fg-dim">
-                <li>• stop the VM and kill its VNC/SSH tunnels</li>
+                <li>• stop the VM and tear down network connections</li>
                 <li>• release its port block ({vm.port_block_base}–{vm.port_block_base + 9})</li>
                 <li>• delete snapshots and the DB record</li>
                 <li>• {isManagedDir(vm) ? "remove the VM directory and disk image" : "leave the imported directory on disk"}</li>

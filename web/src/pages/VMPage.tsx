@@ -16,6 +16,7 @@ import { VMSnapshots } from "../components/vm/VMSnapshots";
 import { JobsPanel } from "../components/jobs/JobsPanel";
 import { StatusDot } from "../components/ui/StatusDot";
 import type { VM } from "../api/client";
+import { deviceName } from "../lib/devices";
 
 type Tab = "display" | "terminal" | "info" | "debug" | "snapshots" | "jobs";
 
@@ -136,22 +137,14 @@ function InfoPanel({ vm }: { vm: VM }) {
     ? guest?.ip ?? (guest ? "acquiring…" : "waiting for guest…")
     : "—";
 
-  // Frida port is only meaningful once frida-server is running on the guest.
-  const { data: frida } = useQuery({
-    queryKey: ["frida", vm.id],
-    queryFn: () => api.fridaStatus(vm.id),
-    enabled: running,
-    refetchInterval: 5000,
-    retry: false,
-  });
-
   const rows: [string, string][] = [
     ["ID", vm.id],
     ["Name", vm.name],
     ["Status", vm.status],
     ["IP Address", ipAddress],
+    ...(vm.device_type ? [["Device", deviceName(vm.device_type)] as [string, string]] : []),
     ["Variant", vm.variant],
-    ["iOS Version", guest?.ios || vm.ios_version || "—"],
+    ["iOS Version", guest?.ios || vm.ios_version || "---"],
     [
       "Network",
       vm.network_mode === "bridged"
@@ -163,17 +156,9 @@ function InfoPanel({ vm }: { vm: VM }) {
     ["Disk", `${vm.disk_size} MiB`],
     ["Screen", `${vm.screen_width}×${vm.screen_height}`],
     ["VM directory", vm.vm_dir],
-    ["PID", vm.pid ? String(vm.pid) : "—"],
+    ["PID", vm.pid ? String(vm.pid) : "---"],
     ["Created", new Date(vm.created_at).toLocaleString()],
     ["Updated", new Date(vm.updated_at).toLocaleString()],
-  ];
-  const ports: [string, number][] = [
-    ["VNC", vm.ports.vnc],
-    ["SSH", vm.ports.ssh],
-    ["SSH (alt)", vm.ports.ssh2],
-    ["RPC", vm.ports.rpc],
-    // Frida is only listed while frida-server is actually running on the guest.
-    ...(frida?.running ? ([["Frida", vm.ports.frida]] as [string, number][]) : []),
   ];
 
   return (
@@ -212,18 +197,34 @@ function InfoPanel({ vm }: { vm: VM }) {
           </tbody>
         </table>
       </Section>
-      <Section title="Port Assignments">
-        <table className="w-full">
-          <tbody>
-            {ports.map(([k, v]) => (
-              <tr key={k} className="border-b border-border/50">
-                <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">{k}</td>
-                <td className="py-1.5 font-mono text-xs text-accent">127.0.0.1:{v}</td>
+      {vm.device_type && (
+        <Section title="Device">
+          <table className="w-full">
+            <tbody>
+              <tr className="border-b border-border/50">
+                <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Model</td>
+                <td className="py-1.5 font-mono text-xs text-fg">{deviceName(vm.device_type)}</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </Section>
+              <tr className="border-b border-border/50">
+                <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Product</td>
+                <td className="py-1.5 font-mono text-xs text-accent">{vm.device_type}</td>
+              </tr>
+              {vm.bundle_version && (
+                <tr className="border-b border-border/50">
+                  <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Bundle</td>
+                  <td className="py-1.5 font-mono text-xs text-fg">{vm.bundle_version}</td>
+                </tr>
+              )}
+              {vm.launchpad_name && (
+                <tr className="border-b border-border/50">
+                  <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Launchpad</td>
+                  <td className="py-1.5 font-mono text-xs text-fg">{vm.launchpad_name}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </Section>
+      )}
 
       {editing && <VMSettingsDialog vm={vm} onClose={() => setEditing(false)} />}
     </div>

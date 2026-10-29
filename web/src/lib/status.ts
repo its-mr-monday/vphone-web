@@ -30,5 +30,7 @@ export const STATUS_HEX: Record<StatusMeta["color"], string> = {
 };
 
 export function statusColor(status: VMStatus): string {
-  return STATUS_HEX[STATUS_META[status].color];
+  const meta = STATUS_META[status];
+  if (!meta) return STATUS_HEX["fg-dim"];
+  return STATUS_HEX[meta.color];
 }

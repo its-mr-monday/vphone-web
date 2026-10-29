@@ -2,14 +2,15 @@ package proxy
 
 import (
 	"bytes"
-	"errors"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
-// ExecResult is the outcome of a single command run on the guest.
+// ExecResult holds the output of a remote command execution.
 type ExecResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
@@ -20,64 +21,87 @@ type ExecResult struct {
 // request forever.
 const DefaultExecTimeout = 30 * time.Second
 
-// Exec runs one command on the guest over SSH and returns its output. It is the
-// request/response counterpart to Terminal (which is interactive/PTY-based) and
-// exists so automation — the REST API and the MCP server — can read crash logs,
-// inspect the filesystem, and drive research tooling without a WebSocket.
-//
-// A non-zero exit status is reported in ExitCode, not as an error; only
-// transport/timeout failures return an error.
-func Exec(cfg TerminalConfig, command string, timeout time.Duration) (ExecResult, error) {
-	if timeout <= 0 {
-		timeout = DefaultExecTimeout
+// rpcRequest is the JSON body sent to POST /v1/rpc.
+type rpcRequest struct {
+	Method string    `json:"method"`
+	Params rpcParams `json:"params"`
+}
+
+type rpcParams struct {
+	Source  string `json:"source"`
+	Timeout int    `json:"timeout"`
+}
+
+// rpcResponse is the JSON body returned by the upstream script.eval RPC.
+type rpcResponse struct {
+	OK      bool   `json:"ok"`
+	Result  string `json:"result"`
+	Output  string `json:"output"`
+	Crashed bool   `json:"crashed"`
+}
+
+// Exec runs a command on the guest via the upstream script.eval RPC. The source
+// parameter is the shell command (or script) to evaluate. TimeoutS is the
+// per-command timeout in seconds passed to the upstream; if zero, DefaultExecTimeout
+// is used to derive a value.
+func Exec(ctx context.Context, apiBaseURL, apiToken, source string, timeoutS int) (ExecResult, error) {
+	if timeoutS <= 0 {
+		timeoutS = int(DefaultExecTimeout.Seconds())
 	}
 
-	sshCfg := &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // device host keys rotate per boot; single-user tool
-		Timeout:         8 * time.Second,
-	}
-
-	client, err := ssh.Dial("tcp", cfg.Addr, sshCfg)
+	body, err := json.Marshal(rpcRequest{
+		Method: "script.eval",
+		Params: rpcParams{
+			Source:  source,
+			Timeout: timeoutS,
+		},
+	})
 	if err != nil {
-		return ExecResult{}, fmt.Errorf("ssh dial %s: %w", cfg.Addr, err)
+		return ExecResult{}, fmt.Errorf("marshal rpc request: %w", err)
 	}
-	defer client.Close()
 
-	sess, err := client.NewSession()
+	url := apiBaseURL + "/v1/rpc"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return ExecResult{}, fmt.Errorf("ssh session: %w", err)
+		return ExecResult{}, fmt.Errorf("create request: %w", err)
 	}
-	defer sess.Close()
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiToken)
 
-	var stdout, stderr bytes.Buffer
-	sess.Stdout = &stdout
-	sess.Stderr = &stderr
-
-	done := make(chan error, 1)
-	go func() { done <- sess.Run(command) }()
-
-	select {
-	case runErr := <-done:
-		res := ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}
-		if runErr != nil {
-			// A command exiting non-zero is a normal result, not a failure.
-			var exitErr *ssh.ExitError
-			if errors.As(runErr, &exitErr) {
-				res.ExitCode = exitErr.ExitStatus()
-				return res, nil
-			}
-			return res, runErr
-		}
-		return res, nil
-
-	case <-time.After(timeout):
-		_ = sess.Signal(ssh.SIGKILL)
-		return ExecResult{
-			Stdout:   stdout.String(),
-			Stderr:   stderr.String(),
-			ExitCode: -1,
-		}, fmt.Errorf("command timed out after %s", timeout)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("rpc call %s: %w", url, err)
 	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("read rpc response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return ExecResult{}, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var rpcResp rpcResponse
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return ExecResult{}, fmt.Errorf("unmarshal rpc response: %w", err)
+	}
+
+	res := ExecResult{
+		Stdout: rpcResp.Output,
+	}
+	if rpcResp.Output == "" && rpcResp.Result != "" {
+		res.Stdout = rpcResp.Result
+	}
+
+	if rpcResp.Crashed {
+		res.ExitCode = -1
+		return res, fmt.Errorf("script crashed")
+	}
+	if !rpcResp.OK {
+		res.ExitCode = 1
+	}
+
+	return res, nil
 }

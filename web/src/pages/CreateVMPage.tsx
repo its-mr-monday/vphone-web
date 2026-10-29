@@ -5,12 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, formatBytes, type Variant, type NetworkMode } from "../api/client";
 import { useCreateVM } from "../hooks/useVM";
 import { Button } from "../components/ui/Button";
+import { DEVICES, type DeviceSpec } from "../lib/devices";
 
 const VARIANTS: { value: Variant; label: string; desc: string }[] = [
-  { value: "regular", label: "Regular", desc: "stock behavior with the VM boot chain" },
-  { value: "dev", label: "Development", desc: "+ TXM entitlement/debug bypasses + rpcserver" },
-  { value: "jb", label: "Jailbreak", desc: "full bypass · Sileo + apt + TrollStore on first boot" },
-  { value: "exp", label: "Experimental", desc: "JB superset + anti-VM-detection research patches" },
+  { value: "standard", label: "Standard", desc: "all CFW patches · debugserver · vphoned · display + camera" },
+  { value: "experimental", label: "Experimental", desc: "standard + hypervisor concealment · Frida Stalker · identity spoofing" },
+  { value: "minimal", label: "Minimal", desc: "boot-essential patches only · no CFW guest tools" },
 ];
 
 export function CreateVMPage() {
@@ -18,9 +18,10 @@ export function CreateVMPage() {
   const create = useCreateVM();
 
   const [step, setStep] = useState(0);
+  const [deviceType, setDeviceType] = useState("iPhone17,3");
   const [ipswId, setIpswId] = useState<string>("");
   const [cloudosId, setCloudosId] = useState<string>("");
-  const [variant, setVariant] = useState<Variant>("regular");
+  const [variant, setVariant] = useState<Variant>("standard");
   const [name, setName] = useState("");
   const [cpu, setCpu] = useState(4);
   const [memory, setMemory] = useState(4096);
@@ -44,7 +45,13 @@ export function CreateVMPage() {
   const selectedIpsw = ready.find((i) => i.id === ipswId);
   const selectedCloudos = cloudosIpsws.find((i) => i.id === cloudosId);
 
-  const steps = ["Firmware", "Variant", "Resources", "Confirm"];
+  const devicesByCategory = DEVICES.reduce<Record<string, DeviceSpec[]>>((acc, d) => {
+    (acc[d.category] ??= []).push(d);
+    return acc;
+  }, {});
+  const categoryLabels: Record<string, string> = { iphone: "iPhone", ipad: "iPad", appletv: "Apple TV" };
+
+  const steps = ["Device", "Firmware", "Variant", "Resources", "Confirm"];
 
   async function submit() {
     setError(null);
@@ -52,6 +59,7 @@ export function CreateVMPage() {
       const vm = await create.mutateAsync({
         name: name.trim(),
         variant,
+        device_type: deviceType || undefined,
         ios_version: selectedIpsw?.version ?? "",
         ipsw_id: ipswId || undefined,
         cloudos_ipsw_id: cloudosId || undefined,
@@ -71,10 +79,11 @@ export function CreateVMPage() {
   }
 
   const canNext =
-    (step === 0) || // firmware optional (bare allowed)
-    (step === 1) ||
-    (step === 2 && name.trim().length > 0) ||
-    step === 3;
+    (step === 0) || // device selection always valid (has default)
+    (step === 1 && ipswId !== "") || // firmware required
+    (step === 2) ||
+    (step === 3 && name.trim().length > 0) ||
+    step === 4;
 
   return (
     <div className="flex h-full flex-col">
@@ -112,6 +121,34 @@ export function CreateVMPage() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl">
           {step === 0 && (
+            <Section title="Choose device type">
+              {Object.entries(devicesByCategory).map(([cat, devices]) => (
+                <div key={cat} className="mb-4">
+                  <div className="mb-1.5 font-mono text-[10px] uppercase tracking-widest text-fg-dim">
+                    {categoryLabels[cat] || cat}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {devices.map((d) => (
+                      <button
+                        key={d.product}
+                        onClick={() => setDeviceType(d.product)}
+                        className={`rounded-md border px-4 py-3 text-left transition-colors ${
+                          deviceType === d.product ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
+                        }`}
+                      >
+                        <div className="font-mono text-xs text-fg">{d.name}</div>
+                        <div className="font-mono text-[10px] text-fg-dim">
+                          {d.product} · {d.screenWidth}x{d.screenHeight} @{d.scale}x
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </Section>
+          )}
+
+          {step === 1 && (
             <Section title="Choose firmware">
               {onlineNodes.length > 0 && (
                 <div className="mb-4 rounded-md border border-border bg-surface p-3">
@@ -141,17 +178,6 @@ export function CreateVMPage() {
               <div className="mb-1.5 font-mono text-[10px] uppercase tracking-widest text-fg-dim">
                 iPhone firmware (IPHONE_SOURCE)
               </div>
-              <button
-                onClick={() => setIpswId("")}
-                className={`mb-2 w-full rounded-md border px-4 py-3 text-left transition-colors ${
-                  ipswId === "" ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
-                }`}
-              >
-                <div className="font-mono text-xs text-fg">No firmware (bare shell)</div>
-                <div className="font-mono text-[10px] text-fg-dim">
-                  create the VM directory only — provision firmware later
-                </div>
-              </button>
               {iphoneIpsws.length === 0 ? (
                 <p className="rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 font-mono text-[11px] text-warn">
                   No iPhone IPSWs in {nodeId ? "this node's" : "the"} library. Add one on the IPSW page to run the full pipeline.
@@ -190,9 +216,9 @@ export function CreateVMPage() {
                       cloudosId === "" ? "border-accent bg-accent/10" : "border-border hover:border-border-bright"
                     }`}
                   >
-                    <div className="font-mono text-xs text-fg">Default (fw_prepare built-in)</div>
+                    <div className="font-mono text-xs text-fg">Default (catalog)</div>
                     <div className="font-mono text-[10px] text-fg-dim">
-                      uses the CLI's default PCC stack — fine for iOS ≤ 26.1
+                      uses the firmware catalog's recommended CloudOS for this device
                     </div>
                   </button>
                   {cloudosIpsws.map((it) => (
@@ -223,7 +249,7 @@ export function CreateVMPage() {
             </Section>
           )}
 
-          {step === 1 && (
+          {step === 2 && (
             <Section title="Firmware variant">
               <div className="grid grid-cols-1 gap-2">
                 {VARIANTS.map((v) => (
@@ -242,7 +268,7 @@ export function CreateVMPage() {
             </Section>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <Section title="Name & resources">
               <label className="mb-4 block">
                 <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-fg-dim">Name</span>
@@ -314,14 +340,15 @@ export function CreateVMPage() {
             </Section>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <Section title="Confirm">
               <div className="rounded-md border border-border bg-surface p-4">
-                <Row k="Name" v={name || "—"} />
+                <Row k="Name" v={name || "---"} />
+                <Row k="Device" v={DEVICES.find((d) => d.product === deviceType)?.name ?? deviceType} />
                 <Row k="Deploy to" v={nodeId ? (onlineNodes.find((n) => n.id === nodeId)?.name ?? nodeId) : "This host"} />
-                <Row k="Firmware" v={selectedIpsw ? `${selectedIpsw.version} (${selectedIpsw.build})` : "none (bare)"} />
+                <Row k="Firmware" v={selectedIpsw ? `${selectedIpsw.version} (${selectedIpsw.build})` : "from catalog"} />
                 {selectedIpsw && (
-                  <Row k="CloudOS" v={selectedCloudos ? `${selectedCloudos.version} (${selectedCloudos.build})` : "default (built-in)"} />
+                  <Row k="CloudOS" v={selectedCloudos ? `${selectedCloudos.version} (${selectedCloudos.build})` : "default (catalog)"} />
                 )}
                 <Row k="Variant" v={VARIANTS.find((v) => v.value === variant)!.label} />
                 <Row k="Network" v={network === "bridged" ? "Bridged (LAN)" : "NAT (shared)"} />
@@ -329,16 +356,10 @@ export function CreateVMPage() {
                 <Row k="Memory" v={`${memory} MiB`} />
                 <Row k="Disk" v={`${disk} MiB`} />
               </div>
-              {selectedIpsw ? (
-                <p className="mt-3 flex items-center gap-2 font-mono text-[11px] text-fg-dim">
-                  <Cpu className="h-3.5 w-3.5" />
-                  provisioning runs fw_prepare → fw_patch → restore → cfw_install as background jobs
-                </p>
-              ) : (
-                <p className="mt-3 font-mono text-[11px] text-warn">
-                  bare VM — not bootable until firmware is provisioned
-                </p>
-              )}
+              <p className="mt-3 flex items-center gap-2 font-mono text-[11px] text-fg-dim">
+                <Cpu className="h-3.5 w-3.5" />
+                vm create handles the full provisioning pipeline as a single background job
+              </p>
               {error && <p className="mt-3 font-mono text-xs text-error">{error}</p>}
             </Section>
           )}
@@ -350,7 +371,7 @@ export function CreateVMPage() {
         <Button variant="ghost" icon={<ChevronLeft className="h-3.5 w-3.5" />} disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
           Back
         </Button>
-        {step < 3 ? (
+        {step < 4 ? (
           <Button variant="primary" icon={<ChevronRight className="h-3.5 w-3.5" />} disabled={!canNext} onClick={() => setStep((s) => s + 1)}>
             Next
           </Button>

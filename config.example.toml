@@ -22,7 +22,8 @@ tls_enabled = false
 vphone_cli = "./vphone-cli"             # path to the vphone-cli submodule
 vm_root    = "~/.vphone-web/vms"        # where VM directories are created
 ipsw_dir   = "~/.vphone-web/ipsws"      # IPSW storage
-data_dir   = "~/.vphone-web"            # SQLite database + server state
+data_dir       = "~/.vphone-web"            # SQLite database + server state
+launchpad_cli  = "/Applications/vphone-launchpad.app/Contents/MacOS/vphone-launchpad-cli"
 
 [ports]
 base       = 10000                      # first host port for VM allocations
@@ -86,3 +87,6 @@ default_role       = "vphone-user"      # role for external users with no group 
 [cluster]
 system_password    = ""                 # required to run --agent, and to register nodes
 heartbeat_interval = "10s"              # how often the controller health-polls nodes
+
+[upstream]
+api_listen_host = "127.0.0.1"          # host for per-VM vphone-cli API listeners

@@ -1,107 +1,77 @@
 package vm
 
 import (
-	"bufio"
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
+	"github.com/cyberm-tech/vphone-web/internal/upstream"
 )
 
-// provision runs the full VM creation pipeline as a chain of background jobs,
-// updating VM status as it progresses. Each step waits for the previous one to
-// succeed; the first failure marks the VM ERROR and halts the chain.
-//
-//	vm_new → [fw_prepare → fw_patch_<variant> → restore → cfw_install_<variant>] → STOPPED
-//
-// The bracketed firmware steps only run when an IPSW was provided; a bare
-// create (no IPSW) stops after vm_new.
+// variantToPreset returns the CLI --preset value for a variant.
+func variantToPreset(variant Variant) string {
+	return string(NormalizeVariant(variant))
+}
+
+// provision runs the VM creation pipeline using the same step-by-step flow the
+// Launchpad app uses: vm new → fw prepare → fw kernelcache → fw patch →
+// vm launch --dfu → recovery-probe → restore → vm stop → cfw install →
+// vm template trim → vm template setup → done.
 func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	if m.jobs == nil {
 		m.markError(v.ID, "job queue unavailable; cannot provision")
 		return
 	}
-	cliDir := m.opts.VphoneCLIDir
-	vmDirArg := "VM_DIR=" + v.VMDir
-
-	// Step 1 — create the VM directory + manifest.
-	if err := m.runStep(v, "vm_new", "vm_new", jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil),
-		Args: []string{
-			"vm_new", vmDirArg,
-			"CPU=" + strconv.Itoa(v.CPU),
-			"MEMORY=" + strconv.Itoa(v.Memory),
-			"DISK_SIZE=" + strconv.Itoa(diskGiB(v.DiskSize)),
-			"NETWORK_MODE=" + networkModeOrDefault(v.NetworkMode),
-			"NET_INTERFACE=" + v.NetworkInterface,
-		},
-	})); err != nil {
-		m.failStep(v.ID, "vm_new", err)
+	if m.launchpad == nil {
+		m.markError(v.ID, "launchpad CLI not configured; cannot provision")
 		return
 	}
 
-	if ipswPath == "" {
-		// Bare shell — no firmware. Ready to configure/backup but not bootable.
-		_ = m.store.updateStatus(v.ID, StatusStopped, "", time.Now())
-		m.log.Info("vm created (bare, no firmware)", "vm", v.ID)
-		return
+	opts := upstream.VMCreateOpts{
+		Device:       v.DeviceType,
+		Preset:       variantToPreset(v.Variant),
+		NetworkMode:  v.NetworkMode,
+		NetworkIface: v.NetworkInterface,
+		CPU:          v.CPU,
+		Memory:       v.Memory,
+		DiskSize:     v.DiskSize,
 	}
-
-	// Step 2 — download/extract/merge firmware from the chosen IPSW(s).
-	// Auto-select cloudOS from the library if the caller didn't specify one.
-	if cloudosPath == "" && m.opts.LatestCloudOSPath != nil {
-		cloudosPath = m.opts.LatestCloudOSPath()
-		if cloudosPath != "" {
-			m.log.Info("auto-selected cloudOS IPSW", "vm", v.ID, "path", cloudosPath)
-		}
+	if ipswPath != "" {
+		opts.IPhoneSource = ipswPath
 	}
-	fwArgs := []string{"IPHONE_SOURCE=" + ipswPath}
 	if cloudosPath != "" {
-		fwArgs = append(fwArgs, "CLOUDOS_SOURCE="+cloudosPath)
+		opts.CloudOSSource = cloudosPath
 	}
-	fwEnv := m.makeEnv(fwArgs)
-	if err := m.runStep(v, "fw_prepare", "fw_prepare", jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: fwEnv, Args: []string{"fw_prepare", vmDirArg},
-	})); err != nil {
-		m.failStep(v.ID, "fw_prepare", err)
+
+	h, err := m.jobs.Enqueue(jobs.Spec{
+		VMID:  v.ID,
+		Type:  "vm_create",
+		Label: "create " + v.Name,
+		Run: func(ctx context.Context, out io.Writer) error {
+			return m.runProvisionSteps(ctx, out, v, opts)
+		},
+	})
+	if err != nil {
+		m.markError(v.ID, err.Error())
 		return
 	}
 
-	// Step 3 — patch the boot chain for the chosen variant.
-	patchTarget := fwPatchTarget(v.Variant)
-	if err := m.runStep(v, "fw_patch", patchTarget, jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil), Args: []string{patchTarget, vmDirArg},
-	})); err != nil {
-		m.failStep(v.ID, patchTarget, err)
-		return
-	}
-
-	// Step 4 — restore (boot_dfu background + pmd3 restore), status RESTORING.
-	_ = m.store.updateStatus(v.ID, StatusRestoring, "", time.Now())
-	if err := m.runStep(v, "restore", "restore", m.restoreRun(v)); err != nil {
-		m.failStep(v.ID, "restore", err)
-		return
-	}
-
-	// Wait for the Virtualization.framework XPC service to release Disk.img.
-	m.waitDiskFree(v)
-
-	// Step 5 — install CFW offline (VM stopped), status INSTALLING_CFW.
-	_ = m.store.updateStatus(v.ID, StatusInstalling, "", time.Now())
-	cfwTarget := cfwInstallTarget(v.Variant)
-	if err := m.runStep(v, "cfw_install", cfwTarget, jobs.RunCommand(jobs.Command{
-		Name: "make", Dir: cliDir, Env: m.makeEnv(nil), Args: []string{cfwTarget, vmDirArg},
-	})); err != nil {
-		m.failStep(v.ID, cfwTarget, err)
+	<-h.Done
+	job, _ := h.Job()
+	if job.Status != jobs.StatusCompleted {
+		errMsg := "provisioning failed"
+		if job.Error != "" {
+			errMsg = job.Error
+		}
+		_ = m.store.updateStatus(v.ID, StatusError, errMsg, time.Now())
 		return
 	}
 
@@ -109,298 +79,253 @@ func (m *Manager) provision(v VM, ipswPath, cloudosPath string) {
 	m.log.Info("vm provisioning complete", "vm", v.ID, "name", v.Name)
 }
 
-// stepTimeout returns the maximum duration for a provisioning step. These are
-// generous ceilings to catch genuine hangs; normal runs finish well within.
-func stepTimeout(jobType string) time.Duration {
-	switch jobType {
-	case "vm_new":
-		return 5 * time.Minute
-	case "fw_prepare":
-		return 90 * time.Minute
-	case "fw_patch":
-		return 30 * time.Minute
-	case "restore":
-		return 60 * time.Minute
-	case "cfw_install":
-		return 30 * time.Minute
-	default:
-		return 60 * time.Minute
-	}
-}
+func (m *Manager) runProvisionSteps(ctx context.Context, out io.Writer, v VM, opts upstream.VMCreateOpts) error {
+	name := v.LaunchpadName
 
-func withTimeout(timeout time.Duration, run jobs.RunFunc) jobs.RunFunc {
-	return func(ctx context.Context, out io.Writer) error {
-		ctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		return run(ctx, out)
+	// Step 1: vm new
+	fmt.Fprintf(out, "== [1/10] creating VM %q ==\n", name)
+	fmt.Fprintf(out, "device: %s, cpu: %d, memory: %d MiB, disk: %d MiB\n", v.DeviceType, opts.CPU, opts.Memory, opts.DiskSize)
+	if err := m.launchpad.ExecVMNew(ctx, name, opts, out); err != nil {
+		return fmt.Errorf("vm new: %w", err)
 	}
-}
 
-// runStep enqueues a job for the VM and blocks until it reaches a terminal
-// state, returning an error if it did not complete successfully. Each step
-// gets a timeout so a hung subprocess cannot block the pipeline forever.
-func (m *Manager) runStep(v VM, jobType, label string, run jobs.RunFunc) error {
-	wrapped := withTimeout(stepTimeout(jobType), run)
-	h, err := m.jobs.Enqueue(jobs.Spec{VMID: v.ID, Type: jobType, Label: label, Run: wrapped})
-	if err != nil {
-		return err
+	// Step 2: fw prepare
+	fmt.Fprintf(out, "== [2/10] preparing firmware ==\n")
+	if opts.IPhoneSource != "" {
+		fmt.Fprintf(out, "iphone-source: %s\n", opts.IPhoneSource)
 	}
-	<-h.Done
-	job, err := h.Job()
-	if err != nil {
-		return err
+	if opts.CloudOSSource != "" {
+		fmt.Fprintf(out, "cloudos-source: %s\n", opts.CloudOSSource)
 	}
-	if job.Status != jobs.StatusCompleted {
-		if job.Error != "" {
-			return errors.New(job.Error)
+	if err := m.launchpad.ExecFWPrepare(ctx, name, opts, out); err != nil {
+		return fmt.Errorf("fw prepare: %w", err)
+	}
+
+	// Step 3: fw kernelcache
+	fmt.Fprintln(out, "== [3/10] checking kernelcache ==")
+	if err := m.launchpad.ExecFWKernelcache(ctx, name, out); err != nil {
+		return fmt.Errorf("fw kernelcache: %w", err)
+	}
+
+	// Step 4: fw patch
+	fmt.Fprintln(out, "== [4/10] patching firmware ==")
+	if err := m.launchpad.ExecFWPatch(ctx, name, out); err != nil {
+		return fmt.Errorf("fw patch: %w", err)
+	}
+
+	// Step 5: vm launch --dfu (background process)
+	//
+	// The restore's cleanup_post_restore phase waits for the DFU VM to
+	// disconnect.  We must kill the DFU process when the restore reaches
+	// that point, otherwise it deadlocks.  The "waiting for disconnect"
+	// message can arrive on the DFU VM's own stdout (which the CLI wrapper
+	// pipes back to us) OR on the restore CLI's stderr, so we wrap `out`
+	// here — before either process starts — to catch it from either source.
+	var killOnce sync.Once
+	var dfuCmd *exec.Cmd
+	killDFU := func() {
+		killOnce.Do(func() {
+			fmt.Fprintln(out, "killing DFU process to allow restore cleanup to complete")
+
+			// 1. Kill the CLI wrapper process group.
+			if dfuCmd != nil && dfuCmd.Process != nil {
+				_ = syscall.Kill(-dfuCmd.Process.Pid, syscall.SIGTERM)
+				waitDone := make(chan struct{})
+				go func() { _ = dfuCmd.Wait(); close(waitDone) }()
+				select {
+				case <-waitDone:
+				case <-time.After(5 * time.Second):
+					fmt.Fprintln(out, "CLI wrapper did not exit in 5s, continuing")
+				}
+				dfuCmd.Process = nil
+			}
+
+			// 2. Ask launchpad to stop the VM.
+			stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+			_ = m.launchpad.VMStop(stopCtx2, name)
+			stopCancel2()
+
+			// 3. Fallback: kill the actual vphone-vm --dfu process directly.
+			// The privileged helper spawns it outside our process group,
+			// and the VM inherits the CLI wrapper's pipe FDs, so we must
+			// kill it to unblock dfuCmd.Wait().
+			m.killDFUByName(name, out)
+		})
+	}
+	watchedOut := &disconnectWatcher{w: out, onDisconnect: killDFU}
+
+	fmt.Fprintln(watchedOut, "== [5/10] launching VM in DFU mode ==")
+	var err error
+	dfuCmd, err = m.launchpad.ExecVMLaunchDFU(ctx, name, watchedOut)
+	if err != nil {
+		return fmt.Errorf("vm launch --dfu: %w", err)
+	}
+	defer func() {
+		// Kill the DFU VM first — it inherits the CLI wrapper's pipe FDs,
+		// so dfuCmd.Wait() deadlocks until the VM exits.
+		m.killDFUByName(name, out)
+		if dfuCmd.Process != nil {
+			_ = syscall.Kill(-dfuCmd.Process.Pid, syscall.SIGTERM)
+			_ = dfuCmd.Wait()
 		}
-		return fmt.Errorf("job ended %s", job.Status)
+	}()
+
+	// Wait for DFU boot chain to start before probing.
+	fmt.Fprintln(watchedOut, "waiting 15s for DFU boot chain...")
+	select {
+	case <-time.After(15 * time.Second):
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+
+	// Step 6: recovery-probe
+	fmt.Fprintln(watchedOut, "== [6/10] probing recovery mode ==")
+	ecid, err := m.launchpad.ReadECID(name)
+	if err != nil {
+		fmt.Fprintf(out, "warning: could not read ECID: %v (probing without ECID filter)\n", err)
+		ecid = ""
+	}
+	if ecid != "" {
+		fmt.Fprintf(out, "ECID: %s\n", ecid)
+	}
+	probeOK := false
+	for attempt := 1; attempt <= 3; attempt++ {
+		fmt.Fprintf(out, "recovery-probe attempt %d/3 (timeout 30s)...\n", attempt)
+		probeErr := m.launchpad.ExecRecoveryProbe(ctx, ecid, 30, out)
+		if probeErr == nil {
+			probeOK = true
+			break
+		}
+		fmt.Fprintf(out, "attempt %d failed: %v\n", attempt, probeErr)
+		if attempt < 3 {
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	if !probeOK {
+		fmt.Fprintln(out, "warning: recovery-probe never succeeded — attempting restore anyway")
+	}
+
+	// Step 7: restore
+	// The restore exits non-zero when seal_system_volume fails, which is
+	// expected for patched firmware. If the disconnect watcher fired (meaning
+	// we reached cleanup_post_restore), the data is on disk and we continue.
+	fmt.Fprintln(watchedOut, "== [7/10] restoring iOS ==")
+	if err := m.launchpad.ExecRestore(ctx, name, watchedOut); err != nil {
+		if watchedOut.fired {
+			fmt.Fprintf(out, "restore exited with error (%v) but disconnect watcher fired — data is on disk, continuing\n", err)
+		} else {
+			return fmt.Errorf("restore: %w", err)
+		}
+	}
+
+	// Step 8: vm stop (ensure DFU process is dead)
+	fmt.Fprintln(out, "== [8/10] stopping DFU process ==")
+	killDFU() // no-op if already killed by the watcher
+	fmt.Fprintln(out, "waiting 5s for cleanup before CFW install")
+	time.Sleep(5 * time.Second)
+
+	// Step 9: cfw install
+	fmt.Fprintln(out, "== [9/10] installing custom firmware ==")
+	var cfwCapture bytes.Buffer
+	cfwTee := io.MultiWriter(out, &cfwCapture)
+	if err := m.launchpad.CFWInstall(ctx, name, cfwTee); err != nil {
+		return fmt.Errorf("cfw install: %w", err)
+	}
+
+	// Step 10a: template trim
+	fmt.Fprintln(out, "== [10/10] template trim + setup ==")
+	if err := m.launchpad.ExecTemplateTrim(ctx, name, "standard", out); err != nil {
+		return fmt.Errorf("template trim: %w", err)
+	}
+
+	// Step 10b: template setup (first boot)
+	var setupCapture bytes.Buffer
+	setupTee := io.MultiWriter(out, &setupCapture)
+	if err := m.launchpad.ExecTemplateSetup(ctx, name, setupTee); err != nil {
+		output := setupCapture.String()
+		if strings.Contains(output, "vphoned did not answer") {
+			fmt.Fprintln(out, "== setup boot timed out but CFW is installed — VM is usable ==")
+			m.stopSetupBootProcess(name, out)
+			return nil
+		}
+		return fmt.Errorf("template setup: %w", err)
+	}
+
+	// Stop any leftover setup boot process.
+	m.stopSetupBootProcess(name, out)
+	fmt.Fprintln(out, "== provisioning complete ==")
 	return nil
 }
 
-func (m *Manager) failStep(id, step string, err error) {
-	msg := fmt.Sprintf("%s failed: %v", step, err)
-	m.log.Error("provisioning step failed", "vm", id, "step", step, "err", err)
-	m.markError(id, msg)
+// stopSetupBootProcess asks launchpad to stop any running VM process left over
+// from the setup boot phase of provisioning.
+func (m *Manager) stopSetupBootProcess(launchpadName string, out io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.launchpad.VMStop(ctx, launchpadName); err != nil {
+		m.log.Debug("stop setup boot process (may already be stopped)", "name", launchpadName, "err", err)
+	} else {
+		msg := "== stopped leftover setup boot process =="
+		m.log.Info(msg, "name", launchpadName)
+		if out != nil {
+			fmt.Fprintln(out, msg)
+		}
+	}
 }
 
 func (m *Manager) markError(id, msg string) {
 	_ = m.store.updateStatus(id, StatusError, msg, time.Now())
 }
 
-// restoreRun coordinates the two concurrent processes of the restore phase:
-// `make boot_dfu` running in the background (holding the VM in DFU) while
-// `make restore_get_shsh` + `make restore` drive the firmware flash. When the
-// restore completes (or fails), boot_dfu is torn down.
-func (m *Manager) restoreRun(v VM) jobs.RunFunc {
-	return func(ctx context.Context, out io.Writer) error {
-		cliDir := m.opts.VphoneCLIDir
-		env := m.makeEnv(nil)
-		vmDirArg := "VM_DIR=" + v.VMDir
-
-		// Remove any stale ECID prediction so we detect the fresh one this boot
-		// writes (avoids an identity race, per the vphone-cli reference flow).
-		predictionFile := filepath.Join(v.VMDir, "udid-prediction.txt")
-		_ = os.Remove(predictionFile)
-
-		fmt.Fprintln(out, "== starting boot_dfu (background) ==")
-		pr, pw := io.Pipe()
-		dfu := exec.Command("make", "boot_dfu", vmDirArg)
-		dfu.Dir = cliDir
-		dfu.Env = env
-		dfu.Stdout = pw
-		dfu.Stderr = pw
-		dfu.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if err := dfu.Start(); err != nil {
-			return fmt.Errorf("start boot_dfu: %w", err)
-		}
-		dfuPID := dfu.Process.Pid
-
-		// Tee DFU output to the job log and watch for the DFU-ready marker.
-		marker := make(chan struct{}, 1)
-		go func() {
-			sc := bufio.NewScanner(pr)
-			sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-			seen := false
-			for sc.Scan() {
-				line := sc.Text()
-				fmt.Fprintln(out, "[dfu] "+line)
-				if !seen && isDFUReady(line) {
-					seen = true
-					select {
-					case marker <- struct{}{}:
-					default:
-					}
-				}
-			}
-		}()
-
-		dfuExit := make(chan error, 1)
-		go func() { dfuExit <- dfu.Wait(); pw.Close() }()
-
-		stopDFU := func() {
-			_ = syscall.Kill(-dfuPID, syscall.SIGTERM)
-		}
-		defer stopDFU()
-
-		// Readiness: the authoritative signal is udid-prediction.txt appearing
-		// (the VM is in DFU and its identity was predicted). The stdout marker is
-		// a secondary trigger since it is not always flushed to the captured pipe.
-		ready := waitForDFUReady(ctx, predictionFile, marker, dfuExit)
-		switch ready {
-		case dfuReady:
-			fmt.Fprintln(out, "== DFU mode reached ==")
-		case dfuEarlyExit:
-			return errors.New("boot_dfu exited before reaching DFU mode")
-		case dfuTimeout:
-			return errors.New("timed out waiting for DFU mode (180s)")
-		case dfuCancelled:
-			return ctx.Err()
-		}
-
-		time.Sleep(3 * time.Second) // brief settle for the recovery endpoint
-
-		for _, target := range []string{"restore_get_shsh", "restore"} {
-			fmt.Fprintf(out, "== make %s ==\n", target)
-			run := jobs.RunCommand(jobs.Command{
-				Name: "make", Dir: cliDir, Env: env, Args: []string{target, vmDirArg},
-			})
-			if err := run(ctx, out); err != nil {
-				return fmt.Errorf("%s failed: %w", target, err)
-			}
-		}
-
-		fmt.Fprintln(out, "== restore complete; stopping DFU ==")
-		stopDFU()
-		select {
-		case <-dfuExit:
-		case <-time.After(15 * time.Second):
-			_ = syscall.Kill(-dfuPID, syscall.SIGKILL)
-		}
-		return nil
-	}
-}
-
-// dfuOutcome is the result of waiting for DFU readiness.
-type dfuOutcome int
-
-const (
-	dfuReady dfuOutcome = iota
-	dfuEarlyExit
-	dfuTimeout
-	dfuCancelled
-)
-
-// waitForDFUReady blocks until the VM reaches DFU (udid-prediction.txt written
-// or the stdout marker fired), the boot_dfu process exits, the 180s deadline
-// passes, or the context is cancelled.
-func waitForDFUReady(ctx context.Context, predictionFile string, marker <-chan struct{}, dfuExit <-chan error) dfuOutcome {
-	deadline := time.After(180 * time.Second)
-	tick := time.NewTicker(1 * time.Second)
-	defer tick.Stop()
-	for {
-		if _, err := os.Stat(predictionFile); err == nil {
-			return dfuReady
-		}
-		select {
-		case <-marker:
-			return dfuReady
-		case <-dfuExit:
-			return dfuEarlyExit
-		case <-deadline:
-			return dfuTimeout
-		case <-ctx.Done():
-			return dfuCancelled
-		case <-tick.C:
-			// re-check the prediction file
-		}
-	}
-}
-
-// isDFUReady matches the boot_dfu stdout marker indicating the VM is in DFU.
-func isDFUReady(line string) bool {
-	l := strings.ToLower(line)
-	return strings.Contains(l, "dfu mode") ||
-		strings.Contains(l, "started in dfu") ||
-		strings.Contains(l, "entering recovery")
-}
-
-// fwPatchTarget maps a variant to its firmware-patch Make target.
-func fwPatchTarget(v Variant) string {
-	switch v {
-	case VariantDev:
-		return "fw_patch_dev"
-	case VariantJB:
-		return "fw_patch_jb"
-	case VariantEXP:
-		return "fw_patch_exp"
-	default:
-		return "fw_patch"
-	}
-}
-
-// cfwInstallTarget maps a variant to its CFW-install Make target.
-func cfwInstallTarget(v Variant) string {
-	switch v {
-	case VariantDev:
-		return "cfw_install_dev"
-	case VariantJB:
-		return "cfw_install_jb"
-	case VariantEXP:
-		return "cfw_install_exp"
-	default:
-		return "cfw_install"
-	}
-}
-
-// networkModeOrDefault returns the VM's network mode, defaulting to nat.
-func networkModeOrDefault(m string) string {
-	if m == "" {
-		return "nat"
-	}
-	return m
-}
-
-// diskGiB converts a MiB disk size to whole GiB (the unit `make vm_new` expects),
-// with a floor of 1 GiB.
-func diskGiB(mib int) int {
-	g := mib / 1024
-	if g < 1 {
-		g = 1
-	}
-	return g
-}
-
-// waitDiskFree ensures the VM's Disk.img is not held by any process before
-// cfw_install runs. The Virtualization.framework XPC service
-// (com.apple.Virtualization.VirtualMachine) can outlive vphone-vm by 30s+.
-func (m *Manager) waitDiskFree(v VM) {
-	disk := filepath.Join(v.VMDir, "Disk.img")
-
-	for i := 0; i < 15; i++ {
-		if !m.diskHeld(disk) {
-			return
-		}
-		m.log.Debug("waiting for disk release", "vm", v.ID, "attempt", i+1)
-		time.Sleep(time.Second)
-	}
-
-	m.killDiskHolders(v, disk)
-
-	for i := 0; i < 15; i++ {
-		if !m.diskHeld(disk) {
-			m.log.Info("disk released after killing XPC services", "vm", v.ID)
-			return
-		}
-		m.log.Debug("waiting for disk release post-kill", "vm", v.ID, "attempt", i+1)
-		time.Sleep(time.Second)
-	}
-	m.log.Warn("disk still held after kill+30s; proceeding anyway", "vm", v.ID)
-}
-
-func (m *Manager) diskHeld(path string) bool {
-	out, err := exec.Command("/usr/sbin/lsof", path).Output()
-	return err == nil && len(strings.TrimSpace(string(out))) > 0
-}
-
-func (m *Manager) killDiskHolders(v VM, disk string) {
-	out, err := exec.Command("/usr/sbin/lsof", "-t", disk).Output()
+// killDFUByName finds and kills any vphone-vm --dfu process whose command line
+// contains the VM's machine directory name. The privileged helper spawns these
+// outside our process group, so process-group kills don't reach them.
+func (m *Manager) killDFUByName(launchpadName string, out io.Writer) {
+	pgrepOut, err := exec.Command("pgrep", "-f", "vphone-vm.*"+launchpadName+".*--dfu").Output()
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(string(pgrepOut)), "\n") {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err != nil || pid <= 1 {
+		if err != nil || pid <= 0 {
 			continue
 		}
-		ps, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
-		cmd := strings.TrimSpace(string(ps))
-		if strings.Contains(cmd, "com.apple.Virtualization") {
-			m.log.Info("killing Virtualization XPC service holding disk", "vm", v.ID, "pid", pid)
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		fmt.Fprintf(out, "killing orphan DFU VM process pid=%d\n", pid)
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		time.Sleep(2 * time.Second)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+}
+
+// disconnectWatcher wraps an io.Writer and calls onDisconnect once when it
+// sees "waiting for disconnect" in the written data. This lets the provisioning
+// pipeline kill the DFU process at the right moment so the restore's
+// cleanup_post_restore phase can complete.
+type disconnectWatcher struct {
+	w            io.Writer
+	onDisconnect func()
+	fired        bool
+	partial      string // leftover from a previous write that didn't end on a newline
+}
+
+func (d *disconnectWatcher) Write(p []byte) (int, error) {
+	n, err := d.w.Write(p)
+	if !d.fired {
+		chunk := d.partial + string(p[:n])
+		if strings.Contains(chunk, "waiting for disconnect") {
+			d.fired = true
+			go d.onDisconnect()
+		}
+		// Keep the last 64 bytes in case the marker spans two writes.
+		if len(chunk) > 64 {
+			d.partial = chunk[len(chunk)-64:]
 		} else {
-			m.log.Warn("non-XPC process holds disk; not killing", "vm", v.ID, "pid", pid, "cmd", cmd)
+			d.partial = chunk
 		}
 	}
+	return n, err
 }

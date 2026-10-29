@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { terminalWebSocketURL } from "../../api/client";
+import { shellWebSocketURL } from "../../api/client";
 import { TerminalSquare } from "lucide-react";
 
 /**
@@ -26,7 +26,6 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
     if (!active || !containerRef.current) return;
 
     const term = new Terminal({
-      convertEol: true,
       cursorBlink: true,
       fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
       fontSize: 13,
@@ -54,12 +53,12 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
     const sendResize = () => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
+        ws.send(JSON.stringify({ resize: [term.cols, term.rows] }));
       }
     };
 
     const connect = () => {
-      const ws = new WebSocket(terminalWebSocketURL(vmId));
+      const ws = new WebSocket(shellWebSocketURL(vmId));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -71,6 +70,17 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
         if (ev.data instanceof ArrayBuffer) {
           term.write(new Uint8Array(ev.data));
         } else if (typeof ev.data === "string") {
+          try {
+            const msg = JSON.parse(ev.data) as { exit?: number; error?: string };
+            if (typeof msg.exit === "number") {
+              term.writeln(`\x1b[33m[exited with code ${msg.exit}]\x1b[0m`);
+              return;
+            }
+            if (msg.error) {
+              term.writeln(`\x1b[31m[error: ${msg.error}]\x1b[0m`);
+              return;
+            }
+          } catch { /* not JSON, treat as raw text */ }
           term.write(ev.data);
         }
       };

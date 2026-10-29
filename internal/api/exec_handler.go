@@ -2,10 +2,8 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/proxy"
 )
@@ -16,10 +14,10 @@ type execRequest struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
-// execCommand runs a single shell command on the guest over SSH and returns its
-// stdout/stderr/exit code. This is the non-interactive counterpart to the
-// /terminal WebSocket — it exists so tooling (and the MCP server) can script the
-// device: read crash logs, inspect the filesystem, drive research utilities.
+// execCommand runs a single shell command on the guest via the upstream vphoned
+// script.eval RPC and returns its output. This is the non-interactive counterpart
+// to the /terminal WebSocket — it exists so tooling (and the MCP server) can
+// script the device.
 func (s *Server) execCommand(w http.ResponseWriter, r *http.Request) {
 	v, ok := s.runningVM(w, r)
 	if !ok {
@@ -36,15 +34,16 @@ func (s *Server) execCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := proxy.Exec(proxy.TerminalConfig{
-		Addr:     fmt.Sprintf("127.0.0.1:%d", v.Ports.SSH),
-		User:     s.cfg.Guest.SSHUser,
-		Password: s.cfg.Guest.SSHPassword,
-	}, req.Command, time.Duration(req.TimeoutSeconds)*time.Second)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	client := s.vms.APIClient(v)
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM API not available")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, res)
+	result, err := proxy.Exec(r.Context(), client.BaseURL, client.Token, req.Command, req.TimeoutSeconds)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "exec failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

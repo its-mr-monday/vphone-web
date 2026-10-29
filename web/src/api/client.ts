@@ -12,7 +12,7 @@ export type VMStatus =
   | "DELETING"
   | "ERROR";
 
-export type Variant = "regular" | "dev" | "jb" | "exp";
+export type Variant = "standard" | "experimental" | "minimal" | "regular" | "dev" | "jb" | "exp";
 
 export interface PortBlock {
   base: number;
@@ -49,6 +49,11 @@ export interface VM {
   node_id?: string;
   node_name?: string;
   node_address?: string;
+  // Upstream v2 fields
+  api_port?: number;
+  device_type?: string;
+  launchpad_name?: string;
+  bundle_version?: string;
 }
 
 export type NetworkMode = "nat" | "bridged" | "hostOnly" | "none";
@@ -78,7 +83,8 @@ export interface FridaProcess {
 
 export interface CreateVMRequest {
   name: string;
-  variant: Variant;
+  variant?: Variant;
+  device_type?: string;
   ios_version?: string;
   ipsw_id?: string;
   cloudos_ipsw_id?: string;
@@ -241,12 +247,40 @@ export const api = {
   reprovisionVM: (id: string, body?: { ipsw_id?: string; cloudos_ipsw_id?: string }) =>
     request<VM>(`/vms/${id}/reprovision`, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
 
-  // Control
+  // Control (legacy socket-based)
   touch: (id: string, body: { type?: "tap" | "swipe"; x: number; y: number; x2?: number; y2?: number; ms?: number }) =>
     request<{ ok: boolean }>(`/vms/${id}/touch`, { method: "POST", body: JSON.stringify(body) }),
   key: (id: string, key: string) =>
     request<{ ok: boolean }>(`/vms/${id}/key`, { method: "POST", body: JSON.stringify({ key }) }),
   screenshotURL: (id: string) => `/api/v1/vms/${id}/screenshot`,
+
+  // RPC proxy (upstream v2 API)
+  rpc: (id: string, method: string, params?: Record<string, unknown>) =>
+    request<unknown>(`/vms/${id}/rpc`, {
+      method: "POST",
+      body: JSON.stringify({ method, params: params ?? {} }),
+    }),
+
+  // Input convenience wrappers via RPC
+  tap: (id: string, x: number, y: number) =>
+    api.rpc(id, "input.tap", { x, y }),
+  doubleTap: (id: string, x: number, y: number) =>
+    api.rpc(id, "input.double_tap", { x, y }),
+  longPress: (id: string, x: number, y: number, durationMS = 500) =>
+    api.rpc(id, "input.long_press", { x, y, duration_ms: durationMS }),
+  swipe: (id: string, fromX: number, fromY: number, toX: number, toY: number, durationMS?: number) =>
+    api.rpc(id, "input.swipe", { x1: fromX, y1: fromY, x2: toX, y2: toY, duration_ms: durationMS }),
+  typeText: (id: string, text: string) =>
+    api.rpc(id, "input.type", { text }),
+  button: (id: string, name: string) =>
+    api.rpc(id, "input.button", { name }),
+  captureScreenshot: async (id: string): Promise<Blob> => {
+    const result = await api.rpc(id, "screen.screenshot") as { mime_type: string; data: string };
+    const binary = atob(result.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: result.mime_type });
+  },
   guestInfo: (id: string) => request<GuestInfo>(`/vms/${id}/info`),
 
   // Frida (dynamic instrumentation)
@@ -419,9 +453,19 @@ export function vncWebSocketURL(id: string): string {
   return wsURL(`/api/v1/vms/${id}/vnc`);
 }
 
-/** Absolute ws:// URL for a VM's SSH terminal proxy endpoint. */
+/** Absolute ws:// URL for a VM's WebCodecs screen stream endpoint. */
+export function screenWebSocketURL(id: string): string {
+  return wsURL(`/api/v1/vms/${id}/screen`);
+}
+
+/** Absolute ws:// URL for a VM's SSH terminal proxy endpoint (legacy). */
 export function terminalWebSocketURL(id: string): string {
   return wsURL(`/api/v1/vms/${id}/terminal`);
+}
+
+/** Absolute ws:// URL for a VM's shell endpoint (upstream v2). */
+export function shellWebSocketURL(id: string): string {
+  return wsURL(`/api/v1/vms/${id}/shell`);
 }
 
 /** Absolute ws:// URL for a job's live log stream. */

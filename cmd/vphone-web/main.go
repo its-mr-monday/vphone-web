@@ -78,6 +78,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		"config", configPath,
 		"vm_root", cfg.Paths.VMRoot,
 		"vphone_cli", cfg.Paths.VphoneCLI,
+		"launchpad_cli", cfg.Paths.LaunchpadCLI,
 		"dev_proxy", cfg.Server.DevProxy,
 	)
 
@@ -100,17 +101,16 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		return err
 	}
 
-	vm.SetVNCPassword(cfg.Guest.VNCPassword)
-	vm.SetGuestSSH(cfg.Guest.SSHUser, cfg.Guest.SSHPassword)
-
 	mgr, err := vm.NewManager(sqlDB, vm.Options{
-		VphoneCLIDir:     cfg.Paths.VphoneCLI,
-		VMRoot:           cfg.Paths.VMRoot,
-		PortBase:         cfg.Ports.Base,
-		PortBlockSize:    cfg.Ports.BlockSize,
-		MaxConcurrentVMs: cfg.Limits.MaxConcurrentVMs,
-		HeadlessVMs:      cfg.Server.HeadlessVMs,
-		Jobs:             queue,
+		VphoneCLIDir:      cfg.Paths.VphoneCLI,
+		VMRoot:            cfg.Paths.VMRoot,
+		PortBase:          cfg.Ports.Base,
+		PortBlockSize:     cfg.Ports.BlockSize,
+		MaxConcurrentVMs:  cfg.Limits.MaxConcurrentVMs,
+		HeadlessVMs:       cfg.Server.HeadlessVMs,
+		LaunchpadCLIPath:  cfg.Paths.LaunchpadCLI,
+		APIListenHost:     cfg.Upstream.APIListenHost,
+		Jobs:              queue,
 		IPSWPath:          library.PathOf,
 		LatestCloudOSPath: library.LatestCloudOSPath,
 		Logger:            logger,
@@ -162,7 +162,7 @@ func run(configPath, devProxy string, agentMode bool, logger *slog.Logger) error
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 15 * time.Second,
-		// No write timeout: WebSocket proxies (VNC) are long-lived.
+		// No write timeout: WebSocket proxies (display, terminal) are long-lived.
 	}
 
 	// TLS: serve HTTPS when a cert/key is configured, or generate a self-signed

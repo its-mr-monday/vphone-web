@@ -2,171 +2,158 @@ package proxy
 
 import (
 	"encoding/json"
-	"io"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/ssh"
 )
 
-// TerminalConfig holds the SSH connection parameters for a VM terminal.
+// TerminalConfig holds the config for a terminal proxy connection.
 type TerminalConfig struct {
-	Addr     string // host:port of the forwarded SSH port
-	User     string
-	Password string
+	APIBaseURL string
+	APIToken   string
+	Program    string // shell program, empty for default
+	Cols       int
+	Rows       int
 }
 
-// resizeMsg is the client→server control message for terminal resize. Terminal
-// keystrokes are sent as binary frames; resize is sent as a JSON text frame.
-type resizeMsg struct {
+// browserResize is the resize message format sent by the browser (xterm.js).
+// Example: {"resize":{"cols":80,"rows":24}}
+type browserResize struct {
 	Resize *struct {
 		Cols int `json:"cols"`
 		Rows int `json:"rows"`
 	} `json:"resize"`
 }
 
-// Terminal upgrades the request to a WebSocket, opens a real SSH session (with
-// a PTY) to the VM over the forwarded SSH port, and bridges the PTY to xterm.js.
-//
-// This is NOT a raw byte bridge: xterm.js is a terminal emulator, not an SSH
-// client, so it cannot perform the SSH handshake itself. Here the server runs a
-// full SSH client (golang.org/x/crypto/ssh), requests a PTY, and shuttles the
-// shell's stdout/stdin to/from the browser — the correct architecture for a
-// web SSH terminal. Window resizes arrive as JSON control frames.
+// upstreamResize is the resize message format the upstream /v1/shell expects.
+// Example: {"resize":[80,24]}
+type upstreamResize struct {
+	Resize [2]int `json:"resize"`
+}
+
+// Terminal upgrades the HTTP request to a WebSocket and proxies it to the VM's
+// /v1/shell WebSocket endpoint. Text frames from the browser are inspected for
+// resize messages and translated from the object format that xterm.js sends to
+// the array format the upstream expects. All other frames pass through unchanged.
 func Terminal(w http.ResponseWriter, r *http.Request, cfg TerminalConfig, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
 
-	sshCfg := &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // device host keys rotate per boot; single-user tool
-		Timeout:         8 * time.Second,
-		// dropbear on the guest is old; allow its algorithms.
-		Config: ssh.Config{},
+	// Build upstream URL with query params.
+	q := url.Values{}
+	q.Set("token", cfg.APIToken)
+	if cfg.Program != "" {
+		q.Set("program", cfg.Program)
 	}
+	if cfg.Cols > 0 {
+		q.Set("cols", fmt.Sprintf("%d", cfg.Cols))
+	}
+	if cfg.Rows > 0 {
+		q.Set("rows", fmt.Sprintf("%d", cfg.Rows))
+	}
+	upstreamPath := "/v1/shell?" + q.Encode()
 
-	client, err := ssh.Dial("tcp", cfg.Addr, sshCfg)
+	upstream, err := dialUpstreamWS(cfg.APIBaseURL, upstreamPath, cfg.APIToken, log)
 	if err != nil {
-		log.Warn("terminal ssh dial failed", "addr", cfg.Addr, "err", err)
-		http.Error(w, "ssh connection failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer client.Close()
-
-	session, err := client.NewSession()
-	if err != nil {
-		http.Error(w, "ssh session failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer session.Close()
-
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-	}
-	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
-		http.Error(w, "pty request failed: "+err.Error(), http.StatusBadGateway)
+		log.Warn("terminal upstream unreachable", "url", cfg.APIBaseURL, "err", err)
+		http.Error(w, "terminal upstream unreachable", http.StatusBadGateway)
 		return
 	}
 
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		http.Error(w, "stdin pipe failed", http.StatusInternalServerError)
-		return
-	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		http.Error(w, "stdout pipe failed", http.StatusInternalServerError)
-		return
-	}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		http.Error(w, "stderr pipe failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Upgrade only after SSH is fully ready so failures return clean HTTP errors.
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		upstream.Close()
 		return
 	}
-	defer ws.Close()
+	log.Info("terminal proxy connected",
+		"upstream", fmt.Sprintf("%s/v1/shell", cfg.APIBaseURL),
+		"client", r.RemoteAddr)
 
-	if err := session.Shell(); err != nil {
-		_ = ws.WriteMessage(websocket.TextMessage, []byte("failed to start shell: "+err.Error()))
-		return
-	}
-	log.Info("terminal connected", "addr", cfg.Addr, "user", cfg.User, "client", r.RemoteAddr)
+	terminalProxy(ws, upstream, log)
+	log.Info("terminal proxy closed", "client", r.RemoteAddr)
+}
 
+// terminalProxy is a modified wsProxy that translates browser resize messages
+// from object format to array format on the browser→upstream path. All other
+// messages pass through verbatim.
+func terminalProxy(browser, upstream *websocket.Conn, log *slog.Logger) {
 	var once sync.Once
-	done := make(chan struct{})
-	closeAll := func() {
+	closeBoth := func() {
 		once.Do(func() {
-			close(done)
-			session.Close()
-			ws.Close()
+			browser.Close()
+			upstream.Close()
 		})
 	}
 
-	// SSH stdout/stderr -> WebSocket (binary frames).
-	pump := func(name string, src io.Reader) {
-		defer closeAll()
-		buf := make([]byte, 32*1024)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// upstream → browser: pass everything through unchanged.
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
 		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
-					log.Debug("terminal ws write failed", "pipe", name, "err", werr)
-					return
-				}
-			}
+			mt, data, err := upstream.ReadMessage()
 			if err != nil {
-				if err != io.EOF {
-					log.Debug("terminal pipe read ended", "pipe", name, "err", err)
-				}
+				log.Debug("terminal upstream read ended", "err", err)
+				return
+			}
+			if err := browser.WriteMessage(mt, data); err != nil {
+				log.Debug("terminal browser write ended", "err", err)
 				return
 			}
 		}
-	}
-	go pump("stdout", stdout)
-	go pump("stderr", stderr)
+	}()
 
-	// WebSocket -> SSH stdin (+ handle resize control frames).
+	// browser → upstream: translate resize messages, pass everything else.
 	go func() {
-		defer closeAll()
+		defer wg.Done()
+		defer closeBoth()
 		for {
-			mt, data, err := ws.ReadMessage()
+			mt, data, err := browser.ReadMessage()
 			if err != nil {
+				log.Debug("terminal browser read ended", "err", err)
 				return
 			}
+
+			// Only text frames can contain resize messages.
 			if mt == websocket.TextMessage {
-				// Try to parse a resize control message; otherwise treat as input.
-				var m resizeMsg
-				if json.Unmarshal(data, &m) == nil && m.Resize != nil {
-					_ = session.WindowChange(m.Resize.Rows, m.Resize.Cols)
+				if translated, ok := translateResize(data); ok {
+					if err := upstream.WriteMessage(websocket.TextMessage, translated); err != nil {
+						log.Debug("terminal upstream write ended", "err", err)
+						return
+					}
 					continue
 				}
 			}
-			if _, err := stdin.Write(data); err != nil {
+
+			if err := upstream.WriteMessage(mt, data); err != nil {
+				log.Debug("terminal upstream write ended", "err", err)
 				return
 			}
 		}
 	}()
 
-	// Wait for the session to end or a pipe to close.
-	go func() {
-		err := session.Wait()
-		if err != nil {
-			log.Debug("terminal session exited", "addr", cfg.Addr, "err", err)
-		}
-		closeAll()
-	}()
-	<-done
-	log.Info("terminal closed", "addr", cfg.Addr, "client", r.RemoteAddr)
+	wg.Wait()
+}
+
+// translateResize checks if data is a browser resize message and converts it
+// to the upstream array format. Returns the translated JSON and true if
+// translation occurred, or nil and false otherwise.
+func translateResize(data []byte) ([]byte, bool) {
+	var msg browserResize
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Resize == nil {
+		return nil, false
+	}
+	out := upstreamResize{Resize: [2]int{msg.Resize.Cols, msg.Resize.Rows}}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }

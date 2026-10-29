@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cyberm-tech/vphone-web/internal/auth"
+	"github.com/cyberm-tech/vphone-web/internal/upstream"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -90,15 +93,18 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 				r.With(user, remote).Post("/stop", s.stopVM)
 				r.With(user, remote).Post("/restart", s.restartVM)
 				r.With(admin, remote).Post("/reprovision", s.reprovisionVM)
-				r.With(user, remote).Get("/vnc", s.vncWS)
-				r.With(user, remote).Get("/terminal", s.terminalWS)
+				r.With(user, remote).Get("/screen", s.displayWS)
+				r.With(user, remote).Get("/vnc", s.displayWS) // backward compat
+				r.With(user, remote).Get("/shell", s.terminalWS)
+				r.With(user, remote).Get("/terminal", s.terminalWS) // backward compat
+				r.With(user, remote).Get("/ports/{port}", s.portTunnelWS)
+				r.With(user, remote).Post("/rpc", s.rpcProxy)
 				r.With(user, remote).Get("/info", s.guestInfo)
 				r.With(user, remote).Get("/frida", s.fridaStatus)
 				r.With(user, remote).Get("/frida/processes", s.fridaProcesses)
 				r.With(admin, remote).Post("/frida/install", s.fridaInstall)
 				r.With(user, remote).Post("/frida/start", s.fridaStart)
 				r.With(user, remote).Post("/frida/stop", s.fridaStop)
-				r.With(admin, remote).Post("/frida/port", s.fridaSetPort)
 				r.With(user, remote).Post("/exec", s.execCommand)
 				r.With(user, remote).Post("/screenshot", s.screenshot)
 				r.With(user, remote).Post("/touch", s.touch)
@@ -141,6 +147,46 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 	}
 
 	return r
+}
+
+// rpcProxy handles POST /api/v1/vms/:id/rpc — generic passthrough for any
+// vphoned RPC call. The request body is {"method":"...", "params":{...}} and
+// the response is the raw result from the upstream RPC.
+func (s *Server) rpcProxy(w http.ResponseWriter, r *http.Request) {
+	v, ok := s.runningVM(w, r)
+	if !ok {
+		return
+	}
+
+	client := s.vms.APIClient(v)
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM API not available")
+		return
+	}
+
+	var req struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	result, err := client.RPC(r.Context(), req.Method, req.Params)
+	if err != nil {
+		var rpcErr *upstream.RPCError
+		if errors.As(err, &rpcErr) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": rpcErr.Message,
+				"code":  rpcErr.Code,
+			})
+			return
+		}
+		writeError(w, http.StatusBadGateway, "rpc failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // devProxyHandler reverse-proxies non-API requests to the Vite dev server,

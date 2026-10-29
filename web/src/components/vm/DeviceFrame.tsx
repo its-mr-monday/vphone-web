@@ -13,7 +13,7 @@ import type { ReactNode } from "react";
  *
  * The fake Dynamic Island is shown only while the VM is off: a running guest
  * renders its own island into the video feed, and overlaying a second one just
- * misaligns. children render inside the screen (noVNC canvas + overlays).
+ * misaligns. children render inside the screen (display canvas + overlays).
  */
 export function DeviceFrame({
   children,
@@ -86,10 +86,10 @@ export function DeviceFrame({
           box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
         }
         /* The screen's aspect ratio is locked to the guest framebuffer
-           (1292×2800) so the noVNC canvas fills it exactly — no letterbox strips
-           — and native RFB input stays pixel-accurate. It's centered inside the
-           body with a thin bezel; matching the aspect makes the top/bottom bezel
-           marginally taller than the sides, which reads as a normal phone. */
+           (1292×2800) so the display canvas fills it exactly — no letterbox
+           strips. It's centered inside the body with a thin bezel; matching
+           the aspect makes the top/bottom bezel marginally taller than the
+           sides, which reads as a normal phone. */
         .device-screen {
           position: absolute;
           top: 50%;
@@ -103,8 +103,9 @@ export function DeviceFrame({
           z-index: 1;
           box-shadow: inset 0 0 0 1px rgba(0,0,0,0.9);
         }
-        /* Force the noVNC canvas to fill the screen slot exactly. */
-        .device-screen canvas {
+        /* Force the display canvas to fill the screen slot exactly. */
+        .device-screen canvas,
+        .device-screen [data-display-canvas] {
           width: 100% !important;
           height: 100% !important;
           margin: 0 !important;

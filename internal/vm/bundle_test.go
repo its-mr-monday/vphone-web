@@ -49,7 +49,7 @@ func makeFakeVM(t *testing.T, m *Manager) VM {
 
 	m.ports.Reserve(12000)
 	v := VM{
-		ID: id, Name: "src", Status: StatusStopped, Variant: VariantJB,
+		ID: id, Name: "src", Status: StatusStopped, Variant: VariantStandard,
 		IOSVersion: "26.1", NetworkMode: "bridged", CPU: 6, Memory: 6144,
 		DiskSize: 32768, PortBlockBase: 12000, VMDir: dir,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
@@ -95,7 +95,7 @@ func TestExportImportRoundtrip(t *testing.T) {
 	if imported.ID == src.ID {
 		t.Fatal("imported VM should have a new id")
 	}
-	if imported.Name != "restored" || imported.Variant != VariantJB || imported.NetworkMode != "bridged" {
+	if imported.Name != "restored" || imported.Variant != VariantStandard || imported.NetworkMode != "bridged" {
 		t.Fatalf("metadata not preserved: %+v", imported)
 	}
 

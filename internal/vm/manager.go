@@ -2,21 +2,23 @@ package vm
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/jobs"
+	"github.com/cyberm-tech/vphone-web/internal/upstream"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +32,12 @@ type Options struct {
 	MaxConcurrentVMs int
 	HeadlessVMs      bool // boot VMs without a host window (web/VNC only)
 	Jobs             *jobs.Queue
+
+	// LaunchpadCLIPath is the path to the vphone-launchpad-cli binary.
+	LaunchpadCLIPath string
+	// APIListenHost is the host address for the vphoned API listener.
+	APIListenHost string
+
 	// IPSWPath resolves an IPSW id to its file path on disk. Provided by the
 	// ipsw library; may be nil if provisioning is disabled.
 	IPSWPath func(id string) (string, error)
@@ -42,15 +50,15 @@ type Options struct {
 // Manager owns the lifecycle of all VMs: persistence, port allocation, the
 // provisioning pipeline, and the live process handles for booted instances.
 type Manager struct {
-	opts   Options
-	log    *slog.Logger
-	store  *store
-	ports  *PortAllocator
-	jobs   *jobs.Queue
-	makeMu sync.Mutex // serializes make invocations that mutate shared CLI state
+	opts      Options
+	log       *slog.Logger
+	store     *store
+	launchpad *upstream.Launchpad
+	ports     *PortAllocator // kept for legacy VMs and port block allocation
+	jobs      *jobs.Queue
 
 	mu       sync.Mutex
-	runtimes map[string]*runtime // id -> live process handles (running VMs only)
+	runtimes map[string]*runtime // id -> live state (running VMs only)
 }
 
 var nameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -74,9 +82,10 @@ func NewManager(sqlDB *sql.DB, opts Options) (*Manager, error) {
 		runtimes: make(map[string]*runtime),
 	}
 
-	// Ensure the pymobiledevice3 restore patch is present so the provisioning
-	// pipeline's restore step doesn't hang (see pmd3patch.go).
-	ensurePMD3Patch(opts.VphoneCLIDir, opts.Logger)
+	// Create the launchpad wrapper for upstream v2 VM management.
+	if opts.LaunchpadCLIPath != "" {
+		m.launchpad = upstream.NewLaunchpad(opts.LaunchpadCLIPath, opts.Logger)
+	}
 
 	if err := m.reconcile(); err != nil {
 		return nil, err
@@ -90,8 +99,37 @@ func (m *Manager) List() ([]VM, error) { return m.store.list() }
 // Get returns a single VM by id.
 func (m *Manager) Get(id string) (VM, error) { return m.store.get(id) }
 
-// Socket returns a control-socket client for a VM.
-func (m *Manager) Socket(v VM) *Socket { return SocketFor(v.VMDir) }
+// APIClient returns an upstream API client for a running VM, or nil if the VM
+// has no API endpoint configured (legacy VM or not running).
+func (m *Manager) APIClient(v VM) *upstream.Client {
+	m.mu.Lock()
+	rt := m.runtimes[v.ID]
+	m.mu.Unlock()
+
+	port := v.APIPort
+	token := v.APIToken
+	if rt != nil {
+		rt.mu.Lock()
+		if rt.apiPort != 0 {
+			port = rt.apiPort
+		}
+		if rt.apiToken != "" {
+			token = rt.apiToken
+		}
+		rt.mu.Unlock()
+	}
+	if port == 0 {
+		return nil
+	}
+	host := m.opts.APIListenHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return upstream.NewClient(
+		fmt.Sprintf("http://%s:%d", host, port),
+		token,
+	)
+}
 
 // RunningCount reports how many VMs are currently booting or running.
 func (m *Manager) RunningCount() (int, error) {
@@ -105,44 +143,75 @@ func (m *Manager) RunningCount() (int, error) {
 // CreateParams are the inputs for creating a VM.
 type CreateParams struct {
 	Name             string
-	Variant          Variant
+	DeviceType       string  // e.g. "iPhone17,3", "iPhone18,1"
+	Variant          Variant // kept for backward compat
 	IOSVersion       string
-	IPSWID           string // iPhone IPSW — when set, the full pipeline runs
-	CloudOSIPSWID    string // CloudOS (PCC) IPSW — optional; differs from IPSWID for newer iOS
+	IPSWID           string // iPhone IPSW -- when set, passed to launchpad
+	CloudOSIPSWID    string // CloudOS (PCC) IPSW -- optional
 	NetworkMode      string // nat | bridged | hostOnly | none (default nat)
 	NetworkInterface string // host interface to bridge to (bridged mode; e.g. en0)
 	CPU              int
 	Memory           int
 	DiskSize         int
+	NodeID           string
 }
 
 // validNetworkModes is the set of accepted network modes.
 var validNetworkModes = map[string]bool{"nat": true, "bridged": true, "hostOnly": true, "none": true}
 
+// sanitizeLaunchpadName converts a display name to a safe filesystem name for
+// the launchpad CLI. It strips non-alphanumeric characters (except dash and
+// underscore) and truncates to 64 chars.
+func sanitizeLaunchpadName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	s := b.String()
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	if s == "" {
+		s = "vm"
+	}
+	return s
+}
+
+// generateAPIToken creates a 32-byte hex token for the vphoned API.
+func generateAPIToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate api token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // Create provisions a new VM. It inserts the record (status CREATING), allocates
 // ports, and launches the provisioning pipeline in the background. The VM is
 // returned immediately in CREATING; callers watch its status and the associated
-// jobs for progress. If no IPSW is given, only `make vm_new` runs and the VM
-// lands in STOPPED (bare shell, not bootable until firmware is provisioned).
+// jobs for progress.
 func (m *Manager) Create(p CreateParams) (VM, error) {
 	name := strings.TrimSpace(p.Name)
 	if !nameRe.MatchString(name) {
 		return VM{}, fmt.Errorf("invalid name %q: must be 1-64 chars, alphanumeric/dash/underscore", name)
 	}
 	if p.Variant == "" {
-		p.Variant = VariantRegular
+		p.Variant = VariantStandard
 	}
 	if !validVariants[p.Variant] {
 		return VM{}, fmt.Errorf("invalid variant %q", p.Variant)
 	}
+	p.Variant = NormalizeVariant(p.Variant)
 	if p.CPU <= 0 {
-		p.CPU = 4
+		p.CPU = 8 // matches CLI default
 	}
 	if p.Memory <= 0 {
-		p.Memory = 4096
+		p.Memory = 8192 // 8 GiB, matches CLI default
 	}
 	if p.DiskSize <= 0 {
-		p.DiskSize = 16384
+		p.DiskSize = 65536 // 64 GiB ≈ 64 GB, matches CLI default
 	}
 	if p.NetworkMode == "" {
 		p.NetworkMode = "nat"
@@ -150,9 +219,12 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	if !validNetworkModes[p.NetworkMode] {
 		return VM{}, fmt.Errorf("invalid network mode %q", p.NetworkMode)
 	}
+	if p.DeviceType == "" {
+		p.DeviceType = "iPhone17,3"
+	}
 
-	// Resolve the IPSW paths up front so we fail fast on a bad reference.
-	var ipswPath, cloudosPath string
+	// Resolve the IPSW path up front so we fail fast on a bad reference.
+	var ipswPath string
 	if p.IPSWID != "" {
 		if m.opts.IPSWPath == nil {
 			return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
@@ -162,12 +234,29 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		if err != nil {
 			return VM{}, fmt.Errorf("resolve IPSW %s: %w", p.IPSWID, err)
 		}
-		if p.CloudOSIPSWID != "" {
-			cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
-			if err != nil {
-				return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
-			}
+	}
+
+	// Resolve CloudOS IPSW path. Auto-select from the library when the user
+	// doesn't pick one — the CLI requires --cloudos-source in non-interactive
+	// mode (exec / no terminal).
+	var cloudosPath string
+	if p.CloudOSIPSWID != "" {
+		if m.opts.IPSWPath == nil {
+			return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
 		}
+		var err error
+		cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+		if err != nil {
+			return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+		}
+	} else if m.opts.LatestCloudOSPath != nil {
+		cloudosPath = m.opts.LatestCloudOSPath()
+	}
+
+	// Generate API token for this VM.
+	apiToken, err := generateAPIToken()
+	if err != nil {
+		return VM{}, err
 	}
 
 	block, err := m.ports.Allocate()
@@ -176,6 +265,7 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 	}
 
 	id := uuid.NewString()
+	launchpadName := sanitizeLaunchpadName(name) + "-" + id[:8]
 	vmDir := filepath.Join(m.opts.VMRoot, id)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
 		m.ports.Release(block.Base)
@@ -202,6 +292,9 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		Ports:            block,
 		ScreenWidth:      DefaultScreenWidth,
 		ScreenHeight:     DefaultScreenHeight,
+		APIToken:         apiToken,
+		DeviceType:       p.DeviceType,
+		LaunchpadName:    launchpadName,
 	}
 	if err := m.store.insert(v); err != nil {
 		m.ports.Release(block.Base)
@@ -209,8 +302,8 @@ func (m *Manager) Create(p CreateParams) (VM, error) {
 		return VM{}, err
 	}
 
-	m.log.Info("created vm", "id", id, "name", name, "variant", p.Variant,
-		"ipsw", p.IPSWID, "vnc_port", block.VNC)
+	m.log.Info("created vm", "id", id, "name", name, "device_type", p.DeviceType,
+		"launchpad_name", launchpadName, "ipsw", p.IPSWID)
 
 	// Launch the provisioning pipeline in the background.
 	go m.provision(v, ipswPath, cloudosPath)
@@ -240,30 +333,26 @@ func (m *Manager) Reprovision(id string, p ReprovisionParams) (VM, error) {
 	if ipswID == "" {
 		ipswID = v.IPSWID
 	}
-	if ipswID == "" {
-		return VM{}, fmt.Errorf("no IPSW specified and VM has no stored IPSW reference")
-	}
 
-	if m.opts.IPSWPath == nil {
-		return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
-	}
-	ipswPath, err := m.opts.IPSWPath(ipswID)
-	if err != nil {
-		return VM{}, fmt.Errorf("resolve IPSW %s: %w", ipswID, err)
-	}
-	var cloudosPath string
-	if p.CloudOSIPSWID != "" {
-		cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+	var ipswPath string
+	if ipswID != "" {
+		if m.opts.IPSWPath == nil {
+			return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
+		}
+		var err error
+		ipswPath, err = m.opts.IPSWPath(ipswID)
 		if err != nil {
-			return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+			return VM{}, fmt.Errorf("resolve IPSW %s: %w", ipswID, err)
 		}
 	}
 
-	if err := os.RemoveAll(v.VMDir); err != nil {
-		m.log.Warn("wipe vm dir failed", "dir", v.VMDir, "err", err)
-	}
-	if err := os.MkdirAll(v.VMDir, 0o755); err != nil {
-		return VM{}, fmt.Errorf("recreate vm dir: %w", err)
+	if m.managed(v.VMDir) {
+		if err := os.RemoveAll(v.VMDir); err != nil {
+			m.log.Warn("wipe vm dir failed", "dir", v.VMDir, "err", err)
+		}
+		if err := os.MkdirAll(v.VMDir, 0o755); err != nil {
+			return VM{}, fmt.Errorf("recreate vm dir: %w", err)
+		}
 	}
 
 	if err := m.store.updateStatus(id, StatusCreating, "", time.Now()); err != nil {
@@ -274,66 +363,36 @@ func (m *Manager) Reprovision(id string, p ReprovisionParams) (VM, error) {
 		_ = m.store.setIPSW(id, ipswID, time.Now())
 	}
 
+	// Resolve CloudOS IPSW path for re-provision.
+	var cloudosPath string
+	if p.CloudOSIPSWID != "" {
+		if m.opts.IPSWPath == nil {
+			return VM{}, fmt.Errorf("provisioning unavailable: no IPSW library configured")
+		}
+		var err error
+		cloudosPath, err = m.opts.IPSWPath(p.CloudOSIPSWID)
+		if err != nil {
+			return VM{}, fmt.Errorf("resolve CloudOS IPSW %s: %w", p.CloudOSIPSWID, err)
+		}
+	} else if m.opts.LatestCloudOSPath != nil {
+		cloudosPath = m.opts.LatestCloudOSPath()
+	}
+
+	// Delete the existing VM from the launchpad library so vm create succeeds.
+	if m.launchpad != nil && v.LaunchpadName != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := m.launchpad.VMDelete(ctx, v.LaunchpadName); err != nil {
+			m.log.Warn("launchpad vm delete for reprovision", "name", v.LaunchpadName, "err", err)
+		}
+		cancel()
+	}
+
 	m.log.Info("re-provisioning vm", "id", id, "name", v.Name, "ipsw", ipswID)
 	go m.provision(v, ipswPath, cloudosPath)
 
 	return m.store.get(id)
 }
 
-// SetFridaPort sets the host port that forwards to the guest's frida-server.
-// port 0 restores the default (block base + 4). If the VM is running the forward
-// is restarted immediately on the new port; the core tunnels are untouched.
-func (m *Manager) SetFridaPort(id string, port int) (VM, error) {
-	v, err := m.store.get(id)
-	if err != nil {
-		return VM{}, err
-	}
-	if port != 0 {
-		if port < 1024 || port > 65535 {
-			return VM{}, fmt.Errorf("frida port %d out of range (1024-65535)", port)
-		}
-		// Avoid colliding with this VM's other forwarded ports.
-		for _, p := range []int{v.Ports.VNC, v.Ports.SSH, v.Ports.SSH2, v.Ports.RPC} {
-			if port == p {
-				return VM{}, fmt.Errorf("frida port %d conflicts with another port for this VM", port)
-			}
-		}
-		// Avoid colliding with any other VM's assigned ports.
-		others, _ := m.store.list()
-		for _, o := range others {
-			if o.ID == id {
-				continue
-			}
-			for _, p := range []int{o.Ports.VNC, o.Ports.SSH, o.Ports.SSH2, o.Ports.RPC, o.Ports.Frida} {
-				if port == p {
-					return VM{}, fmt.Errorf("frida port %d is already used by VM %q", port, o.Name)
-				}
-			}
-		}
-	}
-
-	if err := m.store.setFridaPort(id, port, time.Now()); err != nil {
-		return VM{}, err
-	}
-	updated, err := m.store.get(id)
-	if err != nil {
-		return VM{}, err
-	}
-
-	// Apply live: restart just the Frida forward on the new port.
-	if updated.Status == StatusRunning {
-		m.mu.Lock()
-		rt := m.runtimes[id]
-		m.mu.Unlock()
-		if rt != nil {
-			rt.stopFridaForward()
-			rt.fridaWG.Wait()
-			m.startFridaForward(updated, rt)
-		}
-	}
-	m.log.Info("set frida port", "id", id, "port", updated.Ports.Frida)
-	return updated, nil
-}
 
 // UpdateConfigParams are the user-editable VM settings. Only applied while the
 // VM is STOPPED. Zero/empty fields fall back to the current value.
@@ -346,9 +405,8 @@ type UpdateConfigParams struct {
 }
 
 // UpdateConfig edits a stopped VM's tweakable settings (name, CPU, memory,
-// network). CPU/memory/network are rewritten into the VM's config.plist so the
-// next boot honors them; disk size, variant, and screen geometry are baked in at
-// provisioning time and cannot be changed here.
+// network). Settings are persisted in the DB; the launchpad backend picks them
+// up on next boot.
 func (m *Manager) UpdateConfig(id string, p UpdateConfigParams) (VM, error) {
 	v, err := m.store.get(id)
 	if err != nil {
@@ -391,60 +449,12 @@ func (m *Manager) UpdateConfig(id string, p UpdateConfigParams) (VM, error) {
 		iface = "" // interface only meaningful in bridged mode
 	}
 
-	// Rewrite the manifest so `make boot` picks up the new resources/network.
-	if err := m.writeManifestConfig(v.VMDir, cpu, mem, mode, iface); err != nil {
-		return VM{}, err
-	}
 	if err := m.store.updateConfig(id, name, cpu, mem, mode, iface, time.Now()); err != nil {
 		return VM{}, err
 	}
 	m.log.Info("updated vm config", "id", id, "name", name, "cpu", cpu, "memory", mem,
 		"network", mode, "interface", iface)
 	return m.store.get(id)
-}
-
-// writeManifestConfig patches the VM's config.plist in place: cpuCount,
-// memorySize (bytes), and networkConfig.{mode,interface}. Uses PlistBuddy
-// (macOS built-in). The file is written at provisioning time so it always
-// exists for a provisioned VM.
-func (m *Manager) writeManifestConfig(vmDir string, cpu, memMiB int, mode, iface string) error {
-	plist := filepath.Join(vmDir, "config.plist")
-	if _, err := os.Stat(plist); err != nil {
-		return fmt.Errorf("config.plist not found for VM (not provisioned?): %w", err)
-	}
-	memBytes := int64(memMiB) * 1024 * 1024
-	cmds := [][]string{
-		{"-c", "Set :cpuCount " + strconv.Itoa(cpu)},
-		{"-c", "Set :memorySize " + strconv.FormatInt(memBytes, 10)},
-		{"-c", "Set :networkConfig:mode " + mode},
-	}
-	for _, c := range cmds {
-		if err := runPlistBuddy(plist, c[1]); err != nil {
-			return err
-		}
-	}
-	// The interface key is optional; set-or-add, and clear it when not bridged.
-	if iface != "" {
-		if err := runPlistBuddy(plist, "Set :networkConfig:interface "+iface); err != nil {
-			// Key may not exist yet — add it as a string.
-			if err2 := runPlistBuddy(plist, "Add :networkConfig:interface string "+iface); err2 != nil {
-				return fmt.Errorf("set network interface: %w", err2)
-			}
-		}
-	} else {
-		// Best-effort removal; ignore "does not exist" errors.
-		_ = runPlistBuddy(plist, "Delete :networkConfig:interface")
-	}
-	return nil
-}
-
-// runPlistBuddy runs a single PlistBuddy command against a plist file.
-func runPlistBuddy(plist, command string) error {
-	cmd := exec.Command("/usr/libexec/PlistBuddy", "-c", command, plist)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("PlistBuddy %q: %w: %s", command, err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 // ImportParams describe an existing, already-provisioned VM directory to adopt.
@@ -472,11 +482,12 @@ func (m *Manager) Import(p ImportParams) (VM, error) {
 		return VM{}, fmt.Errorf("%s is not a provisioned VM (no config.plist)", dir)
 	}
 	if p.Variant == "" {
-		p.Variant = VariantRegular
+		p.Variant = VariantStandard
 	}
 	if !validVariants[p.Variant] {
 		return VM{}, fmt.Errorf("invalid variant %q", p.Variant)
 	}
+	p.Variant = NormalizeVariant(p.Variant)
 
 	block, err := m.ports.Allocate()
 	if err != nil {
@@ -538,15 +549,24 @@ func (m *Manager) DeleteJob(id string) (*jobs.Handle, error) {
 
 	return m.jobs.Enqueue(jobs.Spec{
 		VMID: id, Type: "vm_delete", Label: "delete " + v.Name,
-		Run: func(_ context.Context, out io.Writer) error {
+		Run: func(ctx context.Context, out io.Writer) error {
 			fmt.Fprintf(out, "== deleting VM %q (%s) ==\n", v.Name, v.ID)
 
 			if v.Status == StatusRunning || v.Status == StatusBooting {
-				fmt.Fprintln(out, "stopping running VM and tearing down tunnels...")
+				fmt.Fprintln(out, "stopping running VM...")
 				if err := m.Stop(id); err != nil {
 					fmt.Fprintf(out, "  warning: stop failed: %v (continuing)\n", err)
 				} else {
 					fmt.Fprintln(out, "  VM stopped")
+				}
+			}
+
+			if m.launchpad != nil && v.LaunchpadName != "" {
+				fmt.Fprintf(out, "deleting from launchpad: %s\n", v.LaunchpadName)
+				if err := m.launchpad.VMDelete(ctx, v.LaunchpadName); err != nil {
+					fmt.Fprintf(out, "  warning: launchpad delete: %v (continuing)\n", err)
+				} else {
+					fmt.Fprintln(out, "  launchpad VM deleted")
 				}
 			}
 
@@ -569,7 +589,7 @@ func (m *Manager) DeleteJob(id string) (*jobs.Handle, error) {
 				}
 				fmt.Fprintln(out, "  directory removed")
 			} else {
-				fmt.Fprintf(out, "imported VM — leaving directory on disk: %s\n", v.VMDir)
+				fmt.Fprintf(out, "imported VM -- leaving directory on disk: %s\n", v.VMDir)
 			}
 
 			_, _ = m.store.db.Exec(`DELETE FROM snapshots WHERE vm_id = ?`, id)
@@ -619,9 +639,8 @@ func bootable(vmDir string) bool {
 	return err == nil
 }
 
-// Boot starts a VM by running `make boot` in the vphone-cli directory with
-// VM_DIR set to the VM's directory. It tracks the process, wires up usbmux
-// tunnels, and supervises the process. The concurrent-VM limit is enforced.
+// Boot starts a VM via the upstream launchpad CLI. It tracks the API endpoint,
+// supervises health, and enforces the concurrent-VM limit.
 func (m *Manager) Boot(id string) (VM, error) {
 	v, err := m.store.get(id)
 	if err != nil {
@@ -632,9 +651,6 @@ func (m *Manager) Boot(id string) (VM, error) {
 	}
 	if v.Status != StatusStopped && v.Status != StatusError {
 		return v, fmt.Errorf("vm %s cannot boot from status %s", v.Name, v.Status)
-	}
-	if !bootable(v.VMDir) {
-		return v, fmt.Errorf("vm %s has no bootable image (provisioning not completed)", v.Name)
 	}
 
 	running, err := m.RunningCount()
@@ -651,284 +667,277 @@ func (m *Manager) Boot(id string) (VM, error) {
 	}
 	v.Status = StatusBooting
 
-	if err := m.realBoot(v); err != nil {
-		_ = m.store.updateStatus(id, StatusError, err.Error(), time.Now())
-		v.Status = StatusError
-		v.ErrorMessage = err.Error()
-		return v, err
-	}
+	go func() {
+		if err := m.realBoot(v); err != nil {
+			m.log.Error("boot failed", "id", id, "name", v.Name, "err", err)
+			_ = m.store.updateStatus(id, StatusError, err.Error(), time.Now())
+			return
+		}
+		if err := m.store.updateStatus(id, StatusRunning, "", time.Now()); err != nil {
+			m.log.Error("failed to mark vm running", "id", id, "err", err)
+			return
+		}
+		m.log.Info("booted vm", "id", id, "name", v.Name)
+	}()
 
-	if err := m.store.updateStatus(id, StatusRunning, "", time.Now()); err != nil {
-		return VM{}, err
-	}
-	v.Status = StatusRunning
-	m.log.Info("booted vm", "id", id, "name", v.Name)
-	return m.store.get(id)
+	return v, nil
 }
 
-// realBoot launches the vphone-cli boot process and usbmux tunnels, then
-// supervises the process. It returns once the process has survived a short
-// warmup (so obvious immediate failures surface synchronously).
+// realBoot launches the VM via `exec vm launch` with --api-listen so the
+// HTTP/WebSocket API is available on a host TCP port. The resulting process
+// is supervised; when it exits the VM is marked ERROR.
 func (m *Manager) realBoot(v VM) error {
-	m.makeMu.Lock()
-	defer m.makeMu.Unlock()
-
-	rt := &runtime{tail: newRingLog(200)}
-
-	bootArgs := []string{"boot", "VM_DIR=" + v.VMDir}
-	if m.opts.HeadlessVMs {
-		bootArgs = append(bootArgs, "HEADLESS=1")
+	if m.launchpad == nil {
+		return fmt.Errorf("launchpad CLI not configured; cannot boot upstream VMs")
 	}
-	cmd := exec.Command("make", bootArgs...)
-	cmd.Dir = m.opts.VphoneCLIDir
-	cmd.Env = m.makeEnv(nil)
-	cmd.Stdout = rt.tail
-	cmd.Stderr = rt.tail
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start `make boot`: %w", err)
+	// Ensure the VM has an API token.
+	token := v.APIToken
+	if token == "" {
+		var err error
+		token, err = generateAPIToken()
+		if err != nil {
+			return err
+		}
+		if err := m.store.setAPIToken(v.ID, token, time.Now()); err != nil {
+			return fmt.Errorf("persist api token: %w", err)
+		}
 	}
-	rt.cmd = cmd
+
+	// Determine the launchpad name to use.
+	lpName := v.LaunchpadName
+	if lpName == "" {
+		lpName = sanitizeLaunchpadName(v.Name) + "-" + v.ID[:8]
+	}
+
+	ctx := context.Background()
+
+	// Launch the VM directly with --api-listen to get a TCP port for the
+	// HTTP/WebSocket API (display, terminal, RPC).
+	launchResult, err := m.launchpad.VMLaunch(ctx, lpName, upstream.VMStartOpts{
+		Headless: m.opts.HeadlessVMs,
+		APIToken: token,
+	})
+	if err != nil {
+		return fmt.Errorf("vm launch: %w", err)
+	}
+
+	// Parse the API port from the address (e.g. "http://127.0.0.1:8765").
+	apiPort := parseAPIPortFromAddr(launchResult.APIAddr)
+
+	m.log.Info("vm launched with API",
+		"vm", v.ID, "name", v.Name,
+		"api_addr", launchResult.APIAddr, "api_port", apiPort)
+
+	if apiPort > 0 {
+		if err := m.store.setAPIPort(v.ID, apiPort, time.Now()); err != nil {
+			m.log.Warn("failed to persist api port", "vm", v.ID, "err", err)
+		}
+	}
+
+	rt := &runtime{
+		tail:      newRingLog(200),
+		apiPort:   apiPort,
+		apiToken:  token,
+		vmProcess: launchResult.Cmd.Process,
+	}
 
 	m.mu.Lock()
 	m.runtimes[v.ID] = rt
 	m.mu.Unlock()
 
-	_ = m.store.setPID(v.ID, cmd.Process.Pid, time.Now())
+	// Supervise the VM process — mark ERROR if it exits unexpectedly.
+	go func() {
+		err := launchResult.Cmd.Wait()
+		m.log.Warn("vm process exited", "vm", v.ID, "err", err)
 
-	// Warmup: if the process dies almost immediately, treat boot as failed.
-	warm := make(chan error, 1)
-	go func() { warm <- cmd.Wait() }()
-	select {
-	case err := <-warm:
-		// Process exited during warmup — boot failed.
 		m.mu.Lock()
 		delete(m.runtimes, v.ID)
 		m.mu.Unlock()
-		_ = m.store.setPID(v.ID, 0, time.Now())
-		tail := rt.tail.String()
-		return fmt.Errorf("boot process exited early: %v\n%s", err, lastLines(tail, 20))
-	case <-time.After(3 * time.Second):
-		// Still alive — hand off to the long-running supervisor.
-	}
 
-	m.startTunnels(v, rt)
-	go m.superviseWait(v.ID, rt, warm)
+		cur, getErr := m.store.get(v.ID)
+		if getErr != nil {
+			return
+		}
+		if cur.Status == StatusRunning || cur.Status == StatusBooting {
+			msg := "vm process exited unexpectedly"
+			if err != nil {
+				msg = err.Error()
+			}
+			_ = m.store.updateStatus(v.ID, StatusError, msg, time.Now())
+		}
+	}()
+
+	// Also launch the health-check supervision goroutine.
+	go m.superviseEvents(v.ID, rt)
+
 	return nil
 }
 
-// makeEnv builds the environment for vphone-cli make invocations, prepending the
-// CLI's venv and tools bin dirs (so pymobiledevice3, aria2c, trustcache resolve)
-// and layering any extra KEY=VALUE entries.
-func (m *Manager) makeEnv(extra []string) []string {
-	env := os.Environ()
-	prepend := strings.Join([]string{
-		filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin"),
-		filepath.Join(m.opts.VphoneCLIDir, ".tools", "bin"),
-		filepath.Join(m.opts.VphoneCLIDir, ".build", "release"),
-	}, string(os.PathListSeparator))
-	found := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + prepend + string(os.PathListSeparator) + strings.TrimPrefix(e, "PATH=")
-			found = true
-			break
+// parseAPIPortFromAddr extracts the port from an address like "http://127.0.0.1:8765".
+func parseAPIPortFromAddr(addr string) int {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		var port int
+		if _, err := fmt.Sscanf(addr[i+1:], "%d", &port); err == nil && port > 0 {
+			return port
 		}
 	}
-	if !found {
-		env = append(env, "PATH="+prepend)
-	}
-	return append(env, extra...)
+	return 0
 }
 
-// startTunnels launches resilient usbmux forward supervisors mapping host ports
-// to the VM's internal service ports. Because the guest's usbmux endpoint only
-// appears once iOS has booted far enough, each forward is (re)started in a loop
-// until the VM stops — so VNC/SSH connect automatically the moment the device
-// is reachable.
-func (m *Manager) startTunnels(v VM, rt *runtime) {
-	// dropbear (22222) works out of the box on every variant — its host keys are
-	// generated on first boot (JB via vphone_jb_setup, others via `dropbear -R`).
-	// openssh (22) is an optional extra on JB after a Sileo install. The terminal
-	// dials the primary SSH port (→ 22222), so forward both. VNC/SSH/RPC stay on
-	// loopback (reached through the web proxy).
-	core := []forwardSpec{
-		{v.Ports.SSH, 22222, "ssh-dropbear", ""},
-		{v.Ports.SSH2, 22, "ssh-openssh", ""},
-		{v.Ports.VNC, 5901, "vnc", ""},
-		{v.Ports.RPC, 5910, "rpc", ""},
+// parseAPIPort attempts to extract an API port from the JSON result of
+// `launchpad vm start`. It tries several common field names.
+func parseAPIPort(result json.RawMessage) int {
+	if len(result) == 0 {
+		return 0
 	}
-
-	rt.mu.Lock()
-	if rt.tunnelStop == nil {
-		rt.tunnelStop = make(chan struct{})
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		return 0
 	}
-	stop := rt.tunnelStop
-	rt.mu.Unlock()
-
-	for _, f := range core {
-		rt.tunnelWG.Add(1)
-		go m.superviseForward(v, stop, &rt.tunnelWG, f)
+	// Try known field names for the API port.
+	for _, key := range []string{"api_port", "apiPort", "api", "port"} {
+		if v, ok := parsed[key]; ok {
+			switch n := v.(type) {
+			case float64:
+				return int(n)
+			case json.Number:
+				i, _ := n.Int64()
+				return int(i)
+			}
+		}
 	}
-
-	// The Frida forward runs on its own stop channel so its port can be changed
-	// live (SetFridaPort) without disturbing the core tunnels.
-	m.startFridaForward(v, rt)
+	// Try nested address field like {"address": "127.0.0.1:8765"}.
+	for _, key := range []string{"address", "listen", "api_address"} {
+		if v, ok := parsed[key]; ok {
+			if s, ok := v.(string); ok {
+				if i := strings.LastIndex(s, ":"); i >= 0 {
+					var port int
+					if _, err := fmt.Sscanf(s[i+1:], "%d", &port); err == nil && port > 0 {
+						return port
+					}
+				}
+			}
+		}
+	}
+	return 0
 }
 
-// forwardSpec describes a single host→guest usbmux forward.
-type forwardSpec struct {
-	hostPort int
-	vmPort   int
-	label    string
-	bindHost string // interface to bind on the host ("" → 127.0.0.1)
-}
-
-// startFridaForward launches (or relaunches) the Frida forward for a VM on its
-// own stop channel. The port binds 0.0.0.0 so external Frida tooling on the
-// operator's own machine can attach via `frida -H <host>:<port>`.
-func (m *Manager) startFridaForward(v VM, rt *runtime) {
-	rt.mu.Lock()
-	if rt.fridaStop == nil {
-		rt.fridaStop = make(chan struct{})
-	}
-	stop := rt.fridaStop
-	rt.mu.Unlock()
-
-	rt.fridaWG.Add(1)
-	go m.superviseForward(v, stop, &rt.fridaWG, forwardSpec{v.Ports.Frida, 27042, "frida", "0.0.0.0"})
-}
-
-// vmUDID reads a VM's device UDID from the udid-prediction.txt that vphone-cli
-// writes into the VM directory during DFU/restore (line: "UDID=<udid>"). It is
-// used to target usbmux forwards at the correct device — without it, a bare
-// `usbmux forward` binds to whichever device usbmuxd lists first, so multiple
-// running VMs would all tunnel to the same guest. Returns "" if unavailable.
-func vmUDID(vmDir string) string {
-	data, err := os.ReadFile(filepath.Join(vmDir, "udid-prediction.txt"))
+// discoverAPIPort tries to find a running VM's API port by querying launchpad
+// vm list and looking at the result metadata.
+func (m *Manager) discoverAPIPort(ctx context.Context, lpName string) (int, error) {
+	vms, err := m.launchpad.VMList(ctx)
 	if err != nil {
-		return ""
+		return 0, err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "UDID="); ok {
-			return strings.TrimSpace(v)
+	for _, lvm := range vms {
+		if lvm.Name == lpName && lvm.State == "running" {
+			// The port is not directly in the vm list output; it may come from
+			// a separate status query in the future. For now, return 0.
+			return 0, nil
 		}
 	}
-	return ""
+	return 0, fmt.Errorf("vm %s not found in launchpad list", lpName)
 }
 
-// superviseForward keeps a single usbmux forward alive until stop is closed,
-// restarting it whenever the underlying process exits (the guest endpoint only
-// appears once iOS has booted far enough).
-func (m *Manager) superviseForward(v VM, stop <-chan struct{}, wg *sync.WaitGroup, f forwardSpec) {
-	defer wg.Done()
-	py := filepath.Join(m.opts.VphoneCLIDir, ".venv", "bin", "python3")
+// superviseEvents periodically health-checks a running VM and marks it ERROR
+// if the vphoned API becomes unreachable and the VM process has died.
+func (m *Manager) superviseEvents(id string, rt *runtime) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rt.mu.Lock()
+	rt.cancelSupervise = cancel
+	rt.mu.Unlock()
+
+	rt.mu.Lock()
+	port := rt.apiPort
+	token := rt.apiToken
+	rt.mu.Unlock()
+
+	var client *upstream.Client
+	if port > 0 && token != "" {
+		host := m.opts.APIListenHost
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		client = upstream.NewClient(
+			fmt.Sprintf("http://%s:%d", host, port),
+			token,
+		)
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-stop:
+		case <-ctx.Done():
 			return
-		default:
-		}
-		// usbmux forward [--serial UDID] [--host BIND] <HOST_PORT> <DEVICE_PORT>
-		// --serial pins the tunnel to THIS VM's device; without it multiple
-		// running VMs collide onto whichever device usbmuxd lists first.
-		args := []string{"-m", "pymobiledevice3", "usbmux", "forward"}
-		if udid := vmUDID(v.VMDir); udid != "" {
-			args = append(args, "--serial", udid)
-		} else {
-			m.log.Warn("no UDID for VM; usbmux forward may target the wrong device when multiple VMs run",
-				"vm", v.ID, "service", f.label)
-		}
-		if f.bindHost != "" {
-			args = append(args, "--host", f.bindHost)
-		}
-		args = append(args, strconv.Itoa(f.hostPort), strconv.Itoa(f.vmPort))
-		cmd := exec.Command(py, args...)
-		cmd.Dir = v.VMDir
-		cmd.Env = m.makeEnv(nil)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if err := cmd.Start(); err != nil {
-			m.log.Debug("tunnel start failed; retrying", "vm", v.ID, "service", f.label, "err", err)
-			if sleepOrStop(stop, 2*time.Second) {
-				return
+		case <-ticker.C:
+			rt.mu.Lock()
+			stopping := rt.stopping
+			rt.mu.Unlock()
+			if stopping {
+				continue
 			}
-			continue
-		}
 
-		// Kill the tunnel process when stop fires.
-		exited := make(chan struct{})
-		go func() {
-			select {
-			case <-stop:
-				if cmd.Process != nil {
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			// If we have no API client, we can't health check. Just verify
+			// the VM is still in the launchpad list.
+			if client == nil {
+				if !m.checkLaunchpadAlive(ctx, id) {
+					return
 				}
-			case <-exited:
+				continue
 			}
-		}()
-		_ = cmd.Wait()
-		close(exited)
 
-		select {
-		case <-stop:
-			return
-		default:
-		}
-		// Tunnel dropped (device not up yet or connection lost) — retry.
-		if sleepOrStop(stop, 2*time.Second) {
-			return
+			// Health check via the vphoned API.
+			hctx, hcancel := context.WithTimeout(ctx, 5*time.Second)
+			_, err := client.Health(hctx)
+			hcancel()
+			if err != nil {
+				m.log.Warn("vm health check failed", "vm", id, "err", err)
+				if !m.checkLaunchpadAlive(ctx, id) {
+					return
+				}
+			}
 		}
 	}
 }
 
-// sleepOrStop waits for d or until stop is closed. Returns true if stopped.
-func sleepOrStop(stop <-chan struct{}, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-stop:
-		return true
-	case <-t.C:
-		return false
+// checkLaunchpadAlive verifies whether the VM is still running in launchpad.
+// Returns false (and marks the VM ERROR) if the VM process has died.
+func (m *Manager) checkLaunchpadAlive(ctx context.Context, id string) bool {
+	if m.launchpad == nil {
+		return true // can't check, assume alive
 	}
-}
 
-// superviseWait waits (via the warmup channel) for the boot process to exit and
-// reconciles VM state. A graceful stop marks STOPPED; an unexpected exit marks
-// ERROR. Tunnels are always torn down.
-func (m *Manager) superviseWait(id string, rt *runtime, warm chan error) {
-	err := <-warm
+	v, err := m.store.get(id)
+	if err != nil {
+		return true // DB error, don't act
+	}
 
-	rt.mu.Lock()
-	graceful := rt.stopping
-	rt.mu.Unlock()
+	lctx, lcancel := context.WithTimeout(ctx, 10*time.Second)
+	defer lcancel()
+	vms, lerr := m.launchpad.VMList(lctx)
+	if lerr != nil {
+		return true // network error, don't act
+	}
 
-	m.killTunnels(rt)
+	for _, lvm := range vms {
+		if lvm.Name == v.LaunchpadName && lvm.State == "running" {
+			return true
+		}
+	}
+
+	m.log.Error("vm process died", "vm", id, "launchpad_name", v.LaunchpadName)
 	m.mu.Lock()
 	delete(m.runtimes, id)
 	m.mu.Unlock()
-	_ = m.store.setPID(id, 0, time.Now())
-
-	if graceful {
-		m.log.Info("vm stopped", "vm", id)
-		_ = m.store.updateStatus(id, StatusStopped, "", time.Now())
-		return
-	}
-
-	msg := "vphone-cli process exited unexpectedly"
-	if err != nil {
-		msg = fmt.Sprintf("%s: %v", msg, err)
-	}
-	if tail := rt.tail.String(); tail != "" {
-		msg += "\n" + lastLines(tail, 20)
-	}
-	m.log.Error("vm process died", "vm", id, "err", err)
-	_ = m.store.updateStatus(id, StatusError, msg, time.Now())
+	_ = m.store.updateStatus(id, StatusError, "VM process exited unexpectedly", time.Now())
+	_ = m.store.setAPIPort(id, 0, time.Now())
+	return false
 }
 
-// Stop gracefully stops a running VM: signal the process group, wait, then
-// force-kill. Tunnels are cleaned up by the supervisor.
+// Stop gracefully stops a running VM via the launchpad CLI.
 func (m *Manager) Stop(id string) error {
 	v, err := m.store.get(id)
 	if err != nil {
@@ -942,56 +951,58 @@ func (m *Manager) Stop(id string) error {
 	rt := m.runtimes[id]
 	m.mu.Unlock()
 
-	if rt == nil {
-		m.log.Warn("no runtime for running vm; marking stopped", "vm", id)
-		return m.store.updateStatus(id, StatusStopped, "", time.Now())
-	}
-
 	if err := m.store.updateStatus(id, StatusStopping, "", time.Now()); err != nil {
 		return err
 	}
 
-	rt.mu.Lock()
-	rt.stopping = true
-	proc := rt.cmd.Process
-	rt.mu.Unlock()
+	if rt != nil {
+		rt.mu.Lock()
+		rt.stopping = true
+		rt.mu.Unlock()
 
-	if proc == nil {
-		return m.store.updateStatus(id, StatusStopped, "", time.Now())
-	}
-
-	_ = syscall.Kill(-proc.Pid, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() {
-		for {
-			m.mu.Lock()
-			_, alive := m.runtimes[id]
-			m.mu.Unlock()
-			if !alive {
-				close(done)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
+		// Cancel the supervision goroutine.
+		if rt.cancelSupervise != nil {
+			rt.cancelSupervise()
 		}
-	}()
-
-	select {
-	case <-done:
-		m.log.Info("vm stopped gracefully", "vm", id, "name", v.Name)
-	case <-time.After(10 * time.Second):
-		m.log.Warn("graceful stop timed out; sending SIGKILL", "vm", id)
-		_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
-		<-done
 	}
-	return nil
-}
 
-// killTunnels stops all resilient tunnel supervisors and waits for them to exit.
-func (m *Manager) killTunnels(rt *runtime) {
-	rt.stopTunnelSupervisors()
-	rt.tunnelWG.Wait()
-	rt.fridaWG.Wait()
+	// Stop the VM process: kill the process group (vphone-cli + vphone-vm
+	// children share a group via Setpgid), fall back to launchpad.
+	if rt != nil && rt.vmProcess != nil {
+		// Send SIGINT to the entire process group so vphone-vm and its
+		// Virtualization.framework children also receive the signal.
+		pgid := rt.vmProcess.Pid
+		_ = syscall.Kill(-pgid, syscall.SIGINT)
+		done := make(chan struct{})
+		go func() {
+			rt.vmProcess.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			<-done
+		}
+	} else if m.launchpad != nil && v.LaunchpadName != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.launchpad.VMStop(ctx, v.LaunchpadName); err != nil {
+			m.log.Warn("launchpad vm stop failed", "vm", id, "err", err)
+		}
+	}
+
+	// Clean up runtime state.
+	m.mu.Lock()
+	delete(m.runtimes, id)
+	m.mu.Unlock()
+	_ = m.store.setAPIPort(id, 0, time.Now())
+
+	if err := m.store.updateStatus(id, StatusStopped, "", time.Now()); err != nil {
+		return err
+	}
+	m.log.Info("vm stopped", "id", id, "name", v.Name)
+	return nil
 }
 
 // Ports returns the derived port block for a VM's stored base.
@@ -1015,13 +1026,45 @@ func (m *Manager) Shutdown() {
 		}
 		rt.mu.Lock()
 		rt.stopping = true
-		proc := rt.cmd.Process
-		rt.mu.Unlock()
-		if proc != nil {
-			_ = syscall.Kill(-proc.Pid, syscall.SIGTERM)
+		if rt.cancelSupervise != nil {
+			rt.cancelSupervise()
 		}
-		m.killTunnels(rt)
+		rt.mu.Unlock()
 	}
+
+	// Best-effort stop all running VMs.
+	for _, id := range ids {
+		m.mu.Lock()
+		rt := m.runtimes[id]
+		m.mu.Unlock()
+
+		// Kill owned VM processes directly.
+		if rt != nil && rt.vmProcess != nil {
+			_ = rt.vmProcess.Signal(os.Interrupt)
+			continue
+		}
+
+		// Fall back to launchpad for VMs we don't own.
+		if m.launchpad != nil {
+			v, err := m.store.get(id)
+			if err != nil {
+				continue
+			}
+			if v.LaunchpadName != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				_ = m.launchpad.VMStop(ctx, v.LaunchpadName)
+				cancel()
+			}
+		}
+	}
+}
+
+// networkModeOrDefault returns the VM's network mode, defaulting to nat.
+func networkModeOrDefault(mode string) string {
+	if mode == "" {
+		return "nat"
+	}
+	return mode
 }
 
 // lastLines returns the last n lines of s.
