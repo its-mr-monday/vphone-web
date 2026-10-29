@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -49,15 +50,72 @@ type procRunResult struct {
 	Stderr string `json:"stderr"`
 }
 
+// scriptInfoResponse is the shape returned by the script.info RPC.
+type scriptInfoResponse struct {
+	Programs map[string]string `json:"programs"`
+}
+
+var (
+	shellPathCache   sync.Map // apiBaseURL → string
+)
+
+// resolveShellPath queries script.info to find the guest's sh path, which
+// on roothide jailbreaks lives under the jbroot, not /bin/sh. The result
+// is cached per API base URL.
+func resolveShellPath(ctx context.Context, apiBaseURL, apiToken string) string {
+	if cached, ok := shellPathCache.Load(apiBaseURL); ok {
+		return cached.(string)
+	}
+
+	body, _ := json.Marshal(scriptEvalRequest{
+		Method: "script.info",
+		Params: scriptEvalParams{},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBaseURL+"/v1/rpc", bytes.NewReader(body))
+	if err != nil {
+		return "/bin/sh"
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "/bin/sh"
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var info scriptInfoResponse
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return "/bin/sh"
+	}
+
+	for _, name := range []string{"sh", "bash", "zsh"} {
+		if p, ok := info.Programs[name]; ok && p != "" {
+			shellPathCache.Store(apiBaseURL, p)
+			return p
+		}
+	}
+
+	return "/bin/sh"
+}
+
+// ClearShellPathCache removes cached shell paths, e.g. when a VM stops.
+func ClearShellPathCache(apiBaseURL string) {
+	shellPathCache.Delete(apiBaseURL)
+}
+
 // Exec runs a shell command on the guest via the upstream script.eval RPC.
-// The command is wrapped in a proc.run("/bin/sh", ["-c", cmd]) call so it
-// executes as a real shell command, not as JavaScript.
+// The command is wrapped in a proc.run(shell, ["-c", cmd]) call. The shell
+// path is resolved via script.info to handle roothide jailbreaks where
+// /bin/sh doesn't exist.
 func Exec(ctx context.Context, apiBaseURL, apiToken, command string, timeoutS int) (ExecResult, error) {
 	if timeoutS <= 0 {
 		timeoutS = int(DefaultExecTimeout.Seconds())
 	}
 
-	jsSource := fmt.Sprintf(`proc.run("/bin/sh", ["-c", %s])`, jsStringLiteral(command))
+	shellPath := resolveShellPath(ctx, apiBaseURL, apiToken)
+	jsSource := fmt.Sprintf(`proc.run(%s, ["-c", %s])`, jsStringLiteral(shellPath), jsStringLiteral(command))
 
 	body, err := json.Marshal(scriptEvalRequest{
 		Method: "script.eval",
