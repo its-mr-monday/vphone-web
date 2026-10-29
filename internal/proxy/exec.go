@@ -21,38 +21,48 @@ type ExecResult struct {
 // request forever.
 const DefaultExecTimeout = 30 * time.Second
 
-// rpcRequest is the JSON body sent to POST /v1/rpc.
-type rpcRequest struct {
-	Method string    `json:"method"`
-	Params rpcParams `json:"params"`
+// scriptEvalRequest is the JSON body sent to POST /v1/rpc for script.eval.
+type scriptEvalRequest struct {
+	Method string          `json:"method"`
+	Params scriptEvalParams `json:"params"`
 }
 
-type rpcParams struct {
+type scriptEvalParams struct {
 	Source  string `json:"source"`
 	Timeout int    `json:"timeout"`
 }
 
-// rpcResponse is the JSON body returned by the upstream script.eval RPC.
-type rpcResponse struct {
-	OK      bool   `json:"ok"`
-	Result  string `json:"result"`
-	Output  string `json:"output"`
-	Crashed bool   `json:"crashed"`
+// scriptEvalResponse is the JSON body returned by the upstream script.eval RPC.
+type scriptEvalResponse struct {
+	OK      bool            `json:"ok"`
+	Result  json.RawMessage `json:"result"`
+	Output  string          `json:"output"`
+	Error   string          `json:"error"`
+	Crashed bool            `json:"crashed"`
 }
 
-// Exec runs a command on the guest via the upstream script.eval RPC. The source
-// parameter is the shell command (or script) to evaluate. TimeoutS is the
-// per-command timeout in seconds passed to the upstream; if zero, DefaultExecTimeout
-// is used to derive a value.
-func Exec(ctx context.Context, apiBaseURL, apiToken, source string, timeoutS int) (ExecResult, error) {
+// procRunResult is the shape returned by proc.run() inside the JSC session.
+type procRunResult struct {
+	Status int    `json:"status"`
+	Signal *int   `json:"signal"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+}
+
+// Exec runs a shell command on the guest via the upstream script.eval RPC.
+// The command is wrapped in a proc.run("/bin/sh", ["-c", cmd]) call so it
+// executes as a real shell command, not as JavaScript.
+func Exec(ctx context.Context, apiBaseURL, apiToken, command string, timeoutS int) (ExecResult, error) {
 	if timeoutS <= 0 {
 		timeoutS = int(DefaultExecTimeout.Seconds())
 	}
 
-	body, err := json.Marshal(rpcRequest{
+	jsSource := fmt.Sprintf(`proc.run("/bin/sh", ["-c", %s])`, jsStringLiteral(command))
+
+	body, err := json.Marshal(scriptEvalRequest{
 		Method: "script.eval",
-		Params: rpcParams{
-			Source:  source,
+		Params: scriptEvalParams{
+			Source:  jsSource,
 			Timeout: timeoutS,
 		},
 	})
@@ -83,25 +93,35 @@ func Exec(ctx context.Context, apiBaseURL, apiToken, source string, timeoutS int
 		return ExecResult{}, fmt.Errorf("rpc returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var rpcResp rpcResponse
+	var rpcResp scriptEvalResponse
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
 		return ExecResult{}, fmt.Errorf("unmarshal rpc response: %w", err)
 	}
 
-	res := ExecResult{
-		Stdout: rpcResp.Output,
-	}
-	if rpcResp.Output == "" && rpcResp.Result != "" {
-		res.Stdout = rpcResp.Result
-	}
-
 	if rpcResp.Crashed {
-		res.ExitCode = -1
-		return res, fmt.Errorf("script crashed")
-	}
-	if !rpcResp.OK {
-		res.ExitCode = 1
+		return ExecResult{ExitCode: -1, Stderr: rpcResp.Error}, fmt.Errorf("script crashed")
 	}
 
-	return res, nil
+	if !rpcResp.OK {
+		return ExecResult{ExitCode: 1, Stderr: rpcResp.Error}, nil
+	}
+
+	var pr procRunResult
+	if err := json.Unmarshal(rpcResp.Result, &pr); err != nil {
+		return ExecResult{Stdout: string(rpcResp.Result)}, nil
+	}
+
+	return ExecResult{
+		Stdout:   pr.Stdout,
+		Stderr:   pr.Stderr,
+		ExitCode: pr.Status,
+	}, nil
+}
+
+// jsStringLiteral JSON-encodes s as a JavaScript string literal safe for
+// embedding in a JS source template. It reuses JSON encoding since JSON
+// string syntax is a subset of JS string syntax.
+func jsStringLiteral(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
