@@ -43,6 +43,7 @@ All paths expand `~` and are made absolute.
 | `vphone_cli` | `"./vphone-cli"` | `VPHONE_WEB_VPHONE_CLI` | Path to the vphone-cli checkout |
 | `vm_root` | `"~/.vphone-web/vms"` | `VPHONE_WEB_VM_ROOT` | Where VM directories are created |
 | `ipsw_dir` | `"~/.vphone-web/ipsws"` | `VPHONE_WEB_IPSW_DIR` | IPSW storage |
+| `launchpad_cli` | `"/Applications/vphone-launchpad.app/Contents/MacOS/vphone-launchpad-cli"` | `VPHONE_WEB_LAUNCHPAD_CLI` | Path to the vphone-launchpad-cli binary |
 | `data_dir` | `"~/.vphone-web"` | `VPHONE_WEB_DATA_DIR` | SQLite DB + server state |
 
 The database lives at `<data_dir>/vphone-web.db`.
@@ -74,6 +75,14 @@ Credentials for talking to booted guests.
 | `ssh_password` | `"alpine"` | SSH password |
 
 These are the vphone CFW defaults; change them only if you've re-keyed the guest.
+
+## `[upstream]`
+
+Settings for the per-VM vphoned HTTP/WebSocket API (upstream v2).
+
+| Field | Default | Env | Meaning |
+|-------|---------|-----|---------|
+| `api_listen_host` | `"127.0.0.1"` | `VPHONE_WEB_UPSTREAM_API_LISTEN_HOST` | Host address for the vphoned API listener inside each VM |
 
 ## `[auth]`
 

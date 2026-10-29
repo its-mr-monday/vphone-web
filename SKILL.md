@@ -243,6 +243,9 @@ Check whether frida-server is installed and running.
 #### `vphone_frida_start`
 Start frida-server on the guest. Required before using Frida for instrumentation.
 
+#### `vphone_frida_stop`
+Stop frida-server on the guest. Use when you're done with instrumentation or need to free resources.
+
 #### `vphone_frida_processes`
 List running processes visible to Frida. Returns process names, PIDs, and identifiers. Use this to find your target app's PID for attachment.
 
@@ -686,6 +689,7 @@ screenshot → tap input field → type_text("A" * 10000) → tap submit → scr
 ```
 vphone_frida_status    → check if installed/running
 vphone_frida_start     → start frida-server (auto-installs if needed)
+vphone_frida_stop      → stop frida-server
 vphone_frida_processes → list target processes
 ```
 
@@ -988,5 +992,6 @@ To recover: `vphone_stop_vm` (force), then `vphone_boot_vm`, or `vphone_restore_
 | Restore | `vphone_restore_snapshot` | `vm_id, name` (VM must be STOPPED) |
 | Check Frida | `vphone_frida_status` | `vm_id` |
 | Start Frida | `vphone_frida_start` | `vm_id` |
+| Stop Frida | `vphone_frida_stop` | `vm_id` |
 | Install VNC | `vphone_vnc_install` | `vm_id` |
 | Wake screen | `vphone_press_key` | `vm_id, key: "home"` |

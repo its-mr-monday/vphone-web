@@ -31,8 +31,12 @@ is open. When enabled, routes are gated **user** (any signed-in user) or
 | POST | `/vms/import-bundle` | admin | Import a `.vphonevm.zip` |
 | GET | `/vms/{id}/export` | admin | Download a `.vphonevm.zip` (stopped) |
 | POST | `/vms/{id}/boot` · `/stop` · `/restart` | user | Lifecycle |
-| GET **(ws)** | `/vms/{id}/vnc` | user | noVNC display proxy |
-| GET **(ws)** | `/vms/{id}/terminal` | user | SSH terminal proxy |
+| POST | `/vms/{id}/reprovision` | admin | Re-run the provisioning pipeline |
+| GET **(ws)** | `/vms/{id}/screen` | user | noVNC display proxy (alias: `/vnc`) |
+| GET **(ws)** | `/vms/{id}/shell` | user | SSH terminal proxy (alias: `/terminal`) |
+| GET **(ws)** | `/vms/{id}/ports/{port}` | user | Generic port tunnel (WebSocket ↔ guest TCP) |
+| POST | `/vms/{id}/rpc` | user | Generic vphoned RPC proxy (`{ method, params }`) |
+| POST | `/vms/{id}/exec` | user | Run a shell command on the guest |
 | GET | `/vms/{id}/info` | user | Live guest info (IP, iOS, name) |
 | POST | `/vms/{id}/screenshot` | user | Full-res PNG |
 | POST | `/vms/{id}/touch` | user | Inject tap/swipe |
@@ -46,7 +50,13 @@ is open. When enabled, routes are gated **user** (any signed-in user) or
 | GET | `/vms/{id}/frida/processes` | user | Enumerate apps (frida-ps) |
 | POST | `/vms/{id}/frida/install` | admin | Install frida-server (job) |
 | POST | `/vms/{id}/frida/start` · `/stop` | user | Start/stop frida-server |
-| POST | `/vms/{id}/frida/port` | admin | Set the forward port (`0` = default) |
+
+### VNC server (TrollVNC)
+
+| Method | Path | Access | Purpose |
+|--------|------|--------|---------|
+| GET | `/vms/{id}/vnc-server` | user | TrollVNC status (installed/running/port) |
+| POST | `/vms/{id}/vnc-server/install` | admin | Install TrollVNC on the guest |
 
 ### Snapshots
 
@@ -83,6 +93,7 @@ is open. When enabled, routes are gated **user** (any signed-in user) or
 | GET | `/nodes` | admin | List cluster nodes |
 | POST | `/nodes` | admin | Register a node (409 → cert-trust prompt) |
 | DELETE | `/nodes/{id}` | admin | Remove a node |
+| GET | `/nodes/{id}/ipsws` | admin | List a remote node's IPSW library |
 | GET | `/agent/health` | system-pw | Control-link health (worker side; `X-System-Password`) |
 | GET | `/system/status` | user | Host CPU/RAM/disk + running VM count |
 | GET | `/system/config` | admin | Effective non-secret config |

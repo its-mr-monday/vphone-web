@@ -15,7 +15,7 @@ vphone-cli is included as a git submodule at `./vphone-cli/`.
 - **Chi** (`github.com/go-chi/chi/v5`) for HTTP routing — lightweight, stdlib-compatible
 - **gorilla/websocket** (`github.com/gorilla/websocket`) for WebSocket connections (noVNC proxy, terminal, log streaming)
 - **SQLite** via `modernc.org/sqlite` (pure Go, no CGO) for VM metadata, IPSW library, job queue state
-- **No ORM** — raw SQL with `database/sql`, migrations in `./migrations/*.sql`
+- **No ORM** — raw SQL with `database/sql`, migrations in `internal/db/migrations/*.sql`
 
 ### Frontend — React + TypeScript
 - **Vite** for build tooling
@@ -40,16 +40,18 @@ vphone-cli is included as a git submodule at `./vphone-cli/`.
 vphone-web/
 ├── CLAUDE.md                     # This file
 ├── README.md
+├── SKILL.md                      # AI integration guide (MCP tools reference, workflows)
 ├── Makefile                      # Top-level build: `make build`, `make dev`, `make release`
-├── go.mod
-├── go.sum
+├── go.mod / go.sum
 ├── config.example.toml
 │
 ├── vphone-cli/                   # Git submodule — do NOT modify files here
 │
 ├── cmd/
-│   └── vphone-web/
-│       └── main.go               # Entrypoint: parse config, init DB, start server
+│   ├── vphone-web/
+│   │   └── main.go               # Entrypoint: parse config, init DB, start server
+│   └── vphone-mcp/
+│       └── main.go               # MCP server binary (stdio, thin REST client)
 │
 ├── internal/
 │   ├── config/
@@ -57,94 +59,142 @@ vphone-web/
 │   │
 │   ├── db/
 │   │   ├── db.go                 # SQLite connection, migration runner
-│   │   └── migrations/
-│   │       └── 001_init.sql      # VMs, IPSWs, jobs tables
+│   │   └── migrations/           # 001_init.sql through 010_upstream_v2.sql
+│   │
+│   ├── auth/
+│   │   ├── auth.go               # Auth types, password hashing
+│   │   ├── service.go            # User login/session management
+│   │   ├── store.go              # User/session SQLite store
+│   │   ├── middleware.go         # Auth middleware (cookie/header extraction)
+│   │   ├── ldap.go               # LDAP/AD provider (search-then-bind)
+│   │   ├── oidc.go               # OpenID Connect provider
+│   │   └── saml.go               # SAML 2.0 provider
+│   │
+│   ├── cluster/
+│   │   ├── manager.go            # Controller: node registry, health monitoring
+│   │   ├── node.go               # Node model and heartbeat
+│   │   └── proxy.go              # Forward API calls to worker nodes
+│   │
+│   ├── upstream/
+│   │   ├── client.go             # vphoned HTTP/WebSocket client (RPC, health, port tunnels)
+│   │   ├── launchpad.go          # vphone-launchpad-cli wrapper (exec, vm launch/stop/create)
+│   │   └── ws.go                 # WebSocket dial helpers for upstream connections
 │   │
 │   ├── vm/
 │   │   ├── manager.go            # VM lifecycle: create, boot, stop, destroy, list, status
-│   │   ├── instance.go           # Single VM state machine, process handle, port assignments
-│   │   ├── ports.go              # Port pool allocator (VNC, SSH, RPC ranges)
-│   │   ├── socket.go             # vphone.sock client — screenshots, touch, keys, clipboard
+│   │   ├── instance.go           # VM struct, status constants, state machine
+│   │   ├── store.go              # VM SQLite persistence
+│   │   ├── ports.go              # Port pool allocator (VNC, SSH, RPC, Frida ranges)
+│   │   ├── bundle.go             # VM bundle import/export (.vphonevm.zip)
+│   │   ├── provision.go          # Provisioning pipeline (create → restore → CFW install)
+│   │   ├── frida.go              # Frida install/start/stop/status via vphoned
+│   │   ├── snapshots.go          # Snapshot create/restore/delete via launchpad exec
 │   │   └── reconcile.go          # On startup: find orphan VM processes, reconcile DB state
 │   │
 │   ├── ipsw/
-│   │   ├── library.go            # IPSW download, storage, metadata extraction
-│   │   └── firmware.go           # Firmware patching orchestration (calls make targets)
+│   │   ├── library.go            # IPSW registration, download, metadata extraction
+│   │   └── store.go              # IPSW SQLite persistence
 │   │
 │   ├── jobs/
-│   │   ├── queue.go              # Background job queue (SQLite-backed, in-process)
-│   │   └── runner.go             # Job executor — fw_prepare, fw_patch, restore, cfw_install
+│   │   ├── queue.go              # Background job queue (SQLite-backed, concurrency-limited)
+│   │   ├── job.go                # Job model and types
+│   │   ├── runner.go             # Job executor
+│   │   ├── store.go              # Job SQLite persistence
+│   │   └── logsink.go            # Ring-buffer log sink with WebSocket fan-out
 │   │
 │   ├── proxy/
-│   │   ├── vnc.go                # WebSocket-to-TCP VNC proxy (noVNC backend)
-│   │   ├── ssh.go                # WebSocket-to-TCP SSH proxy (xterm.js backend)
-│   │   └── logs.go               # WebSocket log streamer (tails job stdout/stderr)
+│   │   ├── display.go            # WebSocket VNC display proxy (noVNC ↔ vphoned port tunnel)
+│   │   ├── terminal.go           # WebSocket SSH terminal proxy (xterm.js ↔ guest SSH)
+│   │   ├── exec.go               # WebSocket exec proxy (single command execution)
+│   │   ├── porttunnel.go         # Generic WebSocket port tunnel (browser ↔ vphoned /v1/ports/<port>)
+│   │   ├── tcpforward.go         # TCP-to-WebSocket bridge (host tools like frida-ps ↔ guest ports)
+│   │   ├── wsbridge.go           # Shared WebSocket dial/bridge utilities
+│   │   └── logs.go               # WebSocket job log streamer
+│   │
+│   ├── mcp/
+│   │   ├── server.go             # MCP stdio server (JSON-RPC, tool dispatch)
+│   │   ├── tools.go              # 33 MCP tool definitions (VM, display, shell, Frida, snapshots)
+│   │   └── config.go             # MCP server configuration
 │   │
 │   └── api/
 │       ├── router.go             # Chi router setup, middleware, static file serving
-│       ├── middleware.go          # Request logging, recovery, CORS (dev only)
-│       ├── vm_handlers.go        # CRUD + lifecycle endpoints for VMs
+│       ├── api.go                # Server struct, constructor
+│       ├── interfaces.go         # Handler interfaces
+│       ├── middleware.go         # Request logging, recovery, CORS (dev only)
+│       ├── vm_handlers.go        # VM CRUD + lifecycle endpoints
+│       ├── control_handlers.go   # Screenshot, touch, key injection
+│       ├── exec_handler.go       # Guest shell exec endpoint
+│       ├── frida_handlers.go     # Frida management endpoints
+│       ├── vnc_handlers.go       # TrollVNC install/status endpoints
+│       ├── snapshot_handlers.go  # Snapshot CRUD endpoints
+│       ├── bundle_handlers.go    # VM export/import bundle endpoints
 │       ├── ipsw_handlers.go      # IPSW library endpoints
 │       ├── job_handlers.go       # Job status, logs, cancel
-│       └── ws_handlers.go        # WebSocket upgrade handlers (VNC, SSH, logs)
+│       ├── ws_handlers.go        # WebSocket upgrade handlers (display, terminal, logs)
+│       ├── proxy.go              # Port tunnel WebSocket proxy
+│       ├── system_handlers.go    # System status, config, network interfaces
+│       ├── auth_handlers.go      # Login/logout, user session endpoints
+│       ├── sso_handlers.go       # OIDC/SAML callback handlers
+│       └── cluster_handlers.go   # Node registration, health, remote proxying
 │
 ├── web/                          # React frontend
 │   ├── index.html
 │   ├── package.json
-│   ├── tsconfig.json
 │   ├── vite.config.ts
-│   ├── tailwind.config.ts
 │   │
 │   └── src/
 │       ├── main.tsx
 │       ├── App.tsx               # Router, layout, query provider
-│       │
 │       ├── api/
 │       │   └── client.ts         # Typed fetch wrapper, API types, WebSocket helpers
-│       │
+│       ├── lib/
+│       │   ├── devices.ts        # Device model metadata (screen sizes, names)
+│       │   └── status.ts         # VM status helpers
 │       ├── hooks/
 │       │   ├── useVM.ts          # VM CRUD + lifecycle mutations
 │       │   ├── useIPSW.ts        # IPSW library queries
 │       │   ├── useJobs.ts        # Job status polling
-│       │   └── useWebSocket.ts   # Generic reconnecting WebSocket hook
-│       │
+│       │   ├── useSnapshots.ts   # Snapshot queries/mutations
+│       │   ├── useAuth.tsx       # Authentication state
+│       │   ├── useSystem.ts      # System status queries
+│       │   ├── useTheme.tsx      # Dark/light theme toggle
+│       │   ├── useDisplayStream.ts  # VNC display stream hook
+│       │   └── useReconnectingWS.ts # Generic reconnecting WebSocket hook
 │       ├── components/
 │       │   ├── layout/
-│       │   │   ├── Sidebar.tsx       # Nav: VMs list, IPSW library, settings
-│       │   │   └── Header.tsx        # Breadcrumbs, system status
-│       │   │
+│       │   │   └── Sidebar.tsx       # Nav: VMs list, IPSW library, settings
 │       │   ├── vm/
 │       │   │   ├── VMCard.tsx         # VM summary card (status dot, model, iOS version, actions)
-│       │   │   ├── VMList.tsx         # Grid/list of VM cards
-│       │   │   ├── VMDetail.tsx       # Full VM view — tabs for display, terminal, info, snapshots
-│       │   │   ├── VMDisplay.tsx      # noVNC canvas wrapper with touch overlay
+│       │   │   ├── VMDisplay.tsx      # Screenshot-based display with touch overlay
+│       │   │   ├── VMDisplayVNC.tsx   # noVNC canvas wrapper (TrollVNC connection)
+│       │   │   ├── DeviceFrame.tsx    # Realistic iPhone frame with Dynamic Island
 │       │   │   ├── VMTerminal.tsx     # xterm.js SSH terminal
-│       │   │   ├── VMControls.tsx     # Boot, stop, restart, screenshot, home/lock/volume buttons
-│       │   │   ├── VMCreate.tsx       # Create wizard — pick IPSW, variant, CPU/RAM/disk
-│       │   │   └── VMSnapshots.tsx    # Snapshot list, create, restore, delete
-│       │   │
-│       │   ├── ipsw/
-│       │   │   ├── IPSWLibrary.tsx    # IPSW grid with download status
-│       │   │   └── IPSWUpload.tsx     # Upload custom IPSW
-│       │   │
+│       │   │   ├── VMControls.tsx     # Boot, stop, restart buttons
+│       │   │   ├── VMHardwareBar.tsx  # Home, lock, volume hardware key buttons
+│       │   │   ├── VMFrida.tsx        # Frida management panel
+│       │   │   ├── VMSnapshots.tsx    # Snapshot list, create, restore, delete
+│       │   │   ├── VMSettingsDialog.tsx # VM config editor (CPU, memory, network)
+│       │   │   ├── DeleteVMDialog.tsx # Confirm VM deletion
+│       │   │   ├── ImportVMDialog.tsx # Import VM from directory
+│       │   │   └── ImportBundleDialog.tsx # Import .vphonevm.zip bundle
 │       │   ├── jobs/
-│       │   │   ├── JobList.tsx        # Active + recent jobs
+│       │   │   ├── JobsPanel.tsx      # Active + recent jobs panel
+│       │   │   ├── JobBadge.tsx       # Job status badge
 │       │   │   └── JobLog.tsx         # Live-streaming log viewer
-│       │   │
 │       │   └── ui/
 │       │       ├── StatusDot.tsx      # Green/yellow/red/gray status indicator
-│       │       ├── Button.tsx
-│       │       ├── Dialog.tsx
-│       │       └── Progress.tsx       # Progress bar with ETA for long jobs
-│       │
+│       │       └── Button.tsx
 │       └── pages/
 │           ├── DashboardPage.tsx      # Overview: VM grid, system resources, active jobs
 │           ├── VMPage.tsx             # Single VM detail view (tabs)
 │           ├── IPSWPage.tsx           # IPSW library management
 │           ├── CreateVMPage.tsx       # VM creation flow
-│           └── SettingsPage.tsx       # Server config, paths, port ranges
+│           ├── SettingsPage.tsx       # Server config, paths, port ranges
+│           ├── LoginPage.tsx          # Authentication login page
+│           ├── UsersPage.tsx          # User management (admin)
+│           └── NodesPage.tsx          # Cluster node management (admin)
 │
-└── Makefile
+└── docs/                         # In-depth guides (01-getting-started through 12-deployment)
 ```
 
 ---
@@ -156,16 +206,31 @@ All endpoints under `/api/v1/`. JSON request/response bodies. Standard HTTP stat
 ### VMs
 
 ```
-GET    /api/v1/vms                    # List all VMs (id, name, status, ios_version, variant, ports)
+GET    /api/v1/vms                    # List all VMs
 POST   /api/v1/vms                    # Create VM (name, ipsw_id, variant, cpu, memory, disk_size)
+POST   /api/v1/vms/import             # Import VM from directory on disk
+POST   /api/v1/vms/import-bundle      # Import .vphonevm.zip bundle
 GET    /api/v1/vms/:id                # Get VM detail
+PATCH  /api/v1/vms/:id                # Update VM config (name, cpu, memory, network)
 DELETE /api/v1/vms/:id                # Destroy VM (stops if running, deletes directory)
-POST   /api/v1/vms/:id/boot           # Boot VM (starts vphone-cli process + usbmux tunnels)
-POST   /api/v1/vms/:id/stop           # Stop VM (graceful shutdown via socket, then SIGTERM)
+GET    /api/v1/vms/:id/export         # Export VM as .vphonevm.zip bundle
+POST   /api/v1/vms/:id/boot           # Boot VM
+POST   /api/v1/vms/:id/stop           # Stop VM (graceful via launchpad, then SIGTERM)
 POST   /api/v1/vms/:id/restart        # Stop + boot
-POST   /api/v1/vms/:id/screenshot     # Capture screenshot via vphone.sock, return PNG
+POST   /api/v1/vms/:id/reprovision    # Re-run provisioning pipeline
+POST   /api/v1/vms/:id/exec           # Run a shell command on guest, return stdout/stderr/exit
+POST   /api/v1/vms/:id/rpc            # Generic vphoned RPC proxy {method, params}
+GET    /api/v1/vms/:id/info           # Guest device info via vphoned
+POST   /api/v1/vms/:id/screenshot     # Capture screenshot, return PNG
 POST   /api/v1/vms/:id/touch          # Inject touch event {x, y, type: "tap"|"swipe"}
 POST   /api/v1/vms/:id/key            # Inject hardware key {key: "home"|"lock"|"volume_up"|"volume_down"}
+GET    /api/v1/vms/:id/frida          # Frida status (installed, running, version, port)
+GET    /api/v1/vms/:id/frida/processes # List guest processes via frida-ps
+POST   /api/v1/vms/:id/frida/install  # Install frida-server on guest
+POST   /api/v1/vms/:id/frida/start    # Start frida-server on guest
+POST   /api/v1/vms/:id/frida/stop     # Stop frida-server on guest
+GET    /api/v1/vms/:id/vnc-server     # TrollVNC status on guest
+POST   /api/v1/vms/:id/vnc-server/install  # Install TrollVNC on guest
 GET    /api/v1/vms/:id/snapshots       # List snapshots
 POST   /api/v1/vms/:id/snapshots       # Create snapshot {name}
 POST   /api/v1/vms/:id/snapshots/:name/restore  # Restore snapshot
@@ -176,10 +241,10 @@ DELETE /api/v1/vms/:id/snapshots/:name  # Delete snapshot
 
 ```
 GET    /api/v1/ipsws                  # List IPSW library
+POST   /api/v1/ipsws                  # Register IPSW from path on disk
 POST   /api/v1/ipsws/download         # Trigger IPSW download {url or version}
 POST   /api/v1/ipsws/upload           # Upload custom IPSW (multipart)
 DELETE /api/v1/ipsws/:id              # Remove IPSW from library
-GET    /api/v1/ipsws/:id/variants     # List available firmware variants for this IPSW
 ```
 
 ### Jobs
@@ -187,15 +252,49 @@ GET    /api/v1/ipsws/:id/variants     # List available firmware variants for thi
 ```
 GET    /api/v1/jobs                   # List jobs (active + recent)
 GET    /api/v1/jobs/:id               # Job detail + status
-POST   /api/v1/jobs/:id/cancel        # Cancel running job (SIGTERM the subprocess)
+POST   /api/v1/jobs/:id/cancel        # Cancel running job
 ```
 
 ### WebSocket Endpoints
 
 ```
-GET    /api/v1/vms/:id/vnc            # WebSocket → TCP VNC proxy (noVNC connects here)
-GET    /api/v1/vms/:id/terminal       # WebSocket → TCP SSH proxy (xterm.js connects here)
+GET    /api/v1/vms/:id/screen         # WebSocket display proxy (noVNC ↔ vphoned port tunnel)
+GET    /api/v1/vms/:id/vnc            # Alias for /screen (backward compat)
+GET    /api/v1/vms/:id/shell          # WebSocket SSH terminal proxy (xterm.js)
+GET    /api/v1/vms/:id/terminal       # Alias for /shell (backward compat)
+GET    /api/v1/vms/:id/ports/{port}   # Generic WebSocket port tunnel to any guest port
 GET    /api/v1/jobs/:id/logs          # WebSocket log stream (stdout+stderr interleaved)
+```
+
+### Auth
+
+```
+POST   /api/v1/auth/login             # Login (username/password)
+POST   /api/v1/auth/logout            # Logout
+GET    /api/v1/auth/me                # Current user info
+GET    /api/v1/auth/providers         # Available SSO providers
+GET    /api/v1/auth/oidc/login        # OIDC login redirect
+GET    /api/v1/auth/oidc/callback     # OIDC callback
+GET    /api/v1/auth/saml/login        # SAML login redirect
+POST   /api/v1/auth/saml/acs          # SAML assertion consumer service
+```
+
+### Users (admin)
+
+```
+GET    /api/v1/users                  # List users
+POST   /api/v1/users                  # Create user
+PATCH  /api/v1/users/:id             # Update user
+DELETE /api/v1/users/:id             # Delete user
+```
+
+### Cluster (admin)
+
+```
+GET    /api/v1/nodes                  # List nodes
+POST   /api/v1/nodes                  # Register node
+DELETE /api/v1/nodes/:id             # Remove node
+GET    /api/v1/nodes/:id/ipsws       # List a remote node's IPSW library
 ```
 
 ### System
@@ -203,6 +302,7 @@ GET    /api/v1/jobs/:id/logs          # WebSocket log stream (stdout+stderr inte
 ```
 GET    /api/v1/system/status          # Host info: CPU, RAM, disk, running VM count
 GET    /api/v1/system/config          # Current server config (safe fields only)
+GET    /api/v1/system/interfaces      # List host network interfaces
 ```
 
 ---

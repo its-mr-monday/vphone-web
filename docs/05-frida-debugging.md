@@ -48,21 +48,11 @@ session = dev.attach("SpringBoard")
 
 Install the Frida tools on your machine with `pip install frida-tools`.
 
-## Choosing the forward port
+## Forward port
 
 Each VM gets a distinct default Frida port (`base + 4`, e.g. `10004`,
-`10014`, …), so multiple VMs never collide. To pick a specific port — for
-example the canonical `27042` so you can just run `frida -H <host>` — click the
-**gear** next to *Forward port* and set it. The change is applied **live** (the
-forward restarts on the new port without disturbing VNC/SSH), and is rejected if
-it collides with another port on this or any other VM.
-
-```
-POST /api/v1/vms/:id/frida/port   { "port": 27042 }   # 0 = default (base+4)
-```
-
-The chosen port also appears in the **Info** tab's Port Assignments while
-frida-server is running.
+`10014`, …), so multiple VMs never collide. The port is shown in the **Info**
+tab's Port Assignments while frida-server is running.
 
 ## Other debugging
 

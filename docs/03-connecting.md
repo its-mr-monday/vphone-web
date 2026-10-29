@@ -15,8 +15,8 @@ Within a block:
 | Service | Host port | Guest port | Used by |
 |---------|-----------|-----------|---------|
 | VNC | base + 0 | 5901 | noVNC display |
-| SSH (primary) | base + 1 | 22222 | dropbear — the web terminal |
-| SSH (alt) | base + 2 | 22 | openssh (optional, JB) |
+| SSH (primary) | base + 1 | 22 | openssh — the web terminal |
+| SSH (secondary) | base + 2 | 22222 | dropbear (fallback) |
 | RPC | base + 3 | 5910 | control channel |
 | Frida | base + 4 | 27042 | frida-server ([Frida](05-frida-debugging.md)) |
 
@@ -77,7 +77,7 @@ Every forward is a normal localhost TCP port, so you can also SSH from your own
 terminal:
 
 ```sh
-ssh -p 10001 root@127.0.0.1        # primary SSH (dropbear), password: alpine
+ssh -p 10001 root@127.0.0.1        # primary SSH (openssh, port 22), password: alpine
 ```
 
 (Port `10001` is the first VM; use the port shown in the Info tab for others.)

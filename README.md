@@ -109,12 +109,6 @@ passwordless `sudo` for the offline disk-mount step — `cfw_install` re-execs u
 sudo, so run the server where that is permitted. Failures at any step are visible
 in the job log and the VM's ERROR banner; nothing is silently swallowed.
 
-> **pymobiledevice3 restore patch:** on macOS the pmd3 restore hangs at 100% CPU
-> because it doesn't release the pre-reset libusb handle before re-enumerating the
-> DFU device. The server self-heals this on startup (`internal/vm/pmd3patch.go`)
-> by patching the venv's `irecv.py`. If you rebuild the venv, the server re-applies
-> it on next start.
-
 ## Quick start
 
 ```bash
@@ -135,24 +129,33 @@ straight from source: `go run ./cmd/vphone-web`.
 
 ```
 cmd/vphone-web         entrypoint (config → db → jobs → ipsw → vm manager → server)
+cmd/vphone-mcp         MCP server binary (stdio, REST client to vphone-web)
 internal/config        TOML config with defaults + env overrides
 internal/db            SQLite connection + embedded SQL migrations
 internal/jobs          SQLite-backed job queue: concurrency-limited, live log fan-out
 internal/ipsw          IPSW library (register/upload/download/delete)
 internal/vm            VM lifecycle, provisioning pipeline, port allocator,
-                       process supervision, vphone.sock client, snapshots, reconcile
-internal/proxy         WebSocket↔TCP bridges (VNC, SSH) + job-log streamer
+                       process supervision, snapshots, Frida management, reconcile
+internal/upstream      vphone-cli launchpad wrapper + vphoned HTTP/WebSocket client
+internal/proxy         WebSocket↔TCP/WS bridges (display, terminal, port tunnel)
+internal/mcp           MCP tool definitions and server implementation (33 tools)
+internal/auth          Authentication (local, LDAP, OIDC, SAML) + session management
+internal/cluster       Controller/agent clustering, node health, remote API proxy
 internal/api           Chi router, JSON handlers, WS endpoints, static serving
 web/                   React + TS frontend (embedded into the binary at build time)
 ```
 
 ### How it drives vphone-cli
 
-Every operation shells out to a `vphone-cli` Make target with `cmd.Dir` set to the
-CLI checkout and `VM_DIR=<per-VM directory>` (plus `IPHONE_SOURCE`/`CLOUDOS_SOURCE`
-for custom IPSWs). The restore phase runs `make boot_dfu` in the background,
-waits for the DFU-ready marker, runs `restore_get_shsh` + `restore`, then tears
-down the DFU process — coordinated with context cancellation so nothing leaks.
+**Upstream v2 VMs** (vphone-cli 2.13+) are managed through `vphone-launchpad-cli`:
+creation via `vm create`, boot via `exec vm launch --api-listen`, and snapshots via
+`exec vm snapshot`. The guest runs `vphoned`, a daemon with an HTTP/WebSocket API.
+The Go server proxies display, terminal, SSH, Frida, and arbitrary guest ports through
+vphoned's `/v1/ports/<port>` WebSocket endpoint — no raw TCP port-forwards needed.
+
+**Legacy VMs** (vphone-cli < 2.13) use the Make-target pipeline: `fw_prepare →
+fw_patch → restore → cfw_install`, with the restore phase coordinating `boot_dfu` +
+`restore` processes via context cancellation.
 
 ## Documentation
 
@@ -162,6 +165,7 @@ In-depth guides live in [`docs/`](docs/README.md):
 - [Managing VMs](docs/04-managing-vms.md) · [Frida & debugging](docs/05-frida-debugging.md)
 - [Configuration reference](docs/06-configuration.md) · [Clustering](docs/07-clustering.md) · [Access control](docs/08-access-control.md)
 - [API reference](docs/09-api-reference.md) · [Troubleshooting](docs/10-troubleshooting.md)
+- [Finding firmware](docs/11-finding-firmware.md) · [Deployment](docs/12-deployment.md)
 
 ## AI Integration
 
@@ -204,6 +208,7 @@ No config file needed when running locally — the MCP server auto-connects to
 | **Frida** | `frida_status`, `frida_start`, `frida_stop`, `frida_processes` |
 | **VNC** | `vnc_status`, `vnc_install` |
 | **Snapshots** | `list_snapshots`, `create_snapshot`, `restore_snapshot`, `delete_snapshot` |
+| **Jobs** | `get_job`, `list_jobs` |
 | **IPSW** | `list_ipsws`, `device_info` |
 
 All tools are prefixed with `vphone_` in the MCP namespace.
