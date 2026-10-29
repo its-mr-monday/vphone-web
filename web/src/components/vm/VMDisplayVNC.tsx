@@ -13,12 +13,13 @@ export function VMDisplayVNC({ vm, vncPort = 5900 }: { vm: VM; vncPort?: number 
   const [scale, setScale] = useState(1);
   const reconnectTimer = useRef<number | undefined>(undefined);
   const attempt = useRef(0);
+  const disposed = useRef(false);
 
   const zoom = (delta: number) =>
     setScale((s) => Math.min(1.5, Math.max(0.5, +(s + delta).toFixed(2))));
 
   const connect = useCallback(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || disposed.current) return;
 
     // Clean up previous instance.
     if (rfbRef.current) {
@@ -26,10 +27,14 @@ export function VMDisplayVNC({ vm, vncPort = 5900 }: { vm: VM; vncPort?: number 
       rfbRef.current = null;
     }
 
+    // Clear any stale children noVNC may have left behind.
+    const el = containerRef.current;
+    while (el.firstChild) el.removeChild(el.firstChild);
+
     setStatus("connecting");
 
     const wsUrl = portTunnelWebSocketURL(vm.id, vncPort);
-    const rfb = new RFB(containerRef.current, wsUrl, {
+    const rfb = new RFB(el, wsUrl, {
       wsProtocols: [],
     });
 
@@ -40,24 +45,20 @@ export function VMDisplayVNC({ vm, vncPort = 5900 }: { vm: VM; vncPort?: number 
     rfb.qualityLevel = 8;
     rfb.compressionLevel = 2;
 
-    // Set the VNC password (TrollVNC default: "alpine").
     rfb.addEventListener("credentialsrequired", () => {
       rfb.sendCredentials({ password: vm.vnc_password || "alpine" });
     });
 
     rfb.addEventListener("connect", () => {
+      if (disposed.current) return;
       setStatus("connected");
       attempt.current = 0;
     });
 
-    rfb.addEventListener("disconnect", (e: CustomEvent) => {
+    rfb.addEventListener("disconnect", () => {
       rfbRef.current = null;
-      if (e.detail?.clean) {
-        setStatus("disconnected");
-      } else {
-        setStatus("error");
-      }
-      // Auto-reconnect with backoff.
+      if (disposed.current) return;
+      setStatus("error");
       attempt.current += 1;
       const delay = Math.min(1000 * 2 ** attempt.current, 10000);
       reconnectTimer.current = window.setTimeout(connect, delay);
@@ -67,9 +68,15 @@ export function VMDisplayVNC({ vm, vncPort = 5900 }: { vm: VM; vncPort?: number 
   }, [vm.id, vm.vnc_password, vncPort]);
 
   useEffect(() => {
+    disposed.current = false;
+    attempt.current = 0;
     connect();
     return () => {
-      if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current);
+      disposed.current = true;
+      if (reconnectTimer.current) {
+        window.clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = undefined;
+      }
       if (rfbRef.current) {
         rfbRef.current.disconnect();
         rfbRef.current = null;
