@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link, useSearchParams } from "react-router-dom";
-import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks, Settings, Bug } from "lucide-react";
+import { ChevronLeft, Monitor, Info, TerminalSquare, Camera, ListChecks, Settings, Bug, Download } from "lucide-react";
 import { api } from "../api/client";
 import { useVM } from "../hooks/useVM";
 import { useAuth } from "../hooks/useAuth";
@@ -226,8 +226,96 @@ function InfoPanel({ vm }: { vm: VM }) {
         </Section>
       )}
 
+      {running && <BootstrapSection vm={vm} jailbreakLayout={guest?.jailbreak} />}
+
       {editing && <VMSettingsDialog vm={vm} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+function BootstrapSection({ vm, jailbreakLayout }: { vm: VM; jailbreakLayout?: string }) {
+  const qc = useQueryClient();
+
+  const { data: bsStatus, isLoading: bsLoading } = useQuery({
+    queryKey: ["bootstrap-status", vm.id],
+    queryFn: () => api.rpc(vm.id, "bootstrap.status") as Promise<Record<string, unknown>>,
+    refetchInterval: (q) => {
+      const phase = (q.state.data as Record<string, unknown> | undefined)?.phase;
+      if (phase === "downloading" || phase === "preparing" || phase === "installing") return 2000;
+      return false;
+    },
+  });
+
+  const install = useMutation({
+    mutationFn: (layout: string) => api.rpc(vm.id, "bootstrap.install", { layout }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bootstrap-status", vm.id] });
+      qc.invalidateQueries({ queryKey: ["vm-info", vm.id] });
+    },
+  });
+
+  const phase = (bsStatus?.phase as string) ?? "unknown";
+  const isInstalled = jailbreakLayout && jailbreakLayout !== "";
+  const isInstalling = phase === "downloading" || phase === "preparing" || phase === "installing";
+
+  const progress = bsStatus?.downloaded_bytes
+    ? bsStatus.total_bytes
+      ? `${Math.round((Number(bsStatus.downloaded_bytes) / Number(bsStatus.total_bytes)) * 100)}%`
+      : `${Math.round(Number(bsStatus.downloaded_bytes) / 1024 / 1024)} MB`
+    : null;
+
+  return (
+    <Section title="Jailbreak">
+      <table className="w-full">
+        <tbody>
+          <tr className="border-b border-border/50">
+            <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Bootstrap</td>
+            <td className="py-1.5 font-mono text-xs">
+              {bsLoading ? (
+                <span className="text-fg-muted">checking…</span>
+              ) : isInstalled ? (
+                <span className="text-green-400">installed ({jailbreakLayout})</span>
+              ) : isInstalling ? (
+                <span className="text-amber-400">installing… {progress && <span className="text-fg-dim">{progress}</span>}</span>
+              ) : (
+                <span className="text-fg-muted">not installed</span>
+              )}
+            </td>
+          </tr>
+          {isInstalled && (
+            <tr className="border-b border-border/50">
+              <td className="py-1.5 pr-4 font-mono text-[10px] uppercase tracking-widest text-fg-dim">Layout</td>
+              <td className="py-1.5 font-mono text-xs text-accent">{jailbreakLayout}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      {!isInstalled && !isInstalling && (
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={() => install.mutate("roothide")}
+            disabled={install.isPending}
+            className="flex items-center gap-1.5 rounded bg-accent/10 px-3 py-1.5 font-mono text-xs text-accent transition-colors hover:bg-accent/20 disabled:opacity-50"
+          >
+            <Download className="h-3 w-3" />
+            Install Bootstrap (RootHide)
+          </button>
+          <button
+            onClick={() => install.mutate("rootless")}
+            disabled={install.isPending}
+            className="flex items-center gap-1.5 rounded bg-border/30 px-3 py-1.5 font-mono text-xs text-fg-dim transition-colors hover:bg-border/50 disabled:opacity-50"
+          >
+            <Download className="h-3 w-3" />
+            Rootless
+          </button>
+        </div>
+      )}
+      {install.isError && (
+        <p className="mt-2 font-mono text-xs text-red-400">
+          {(install.error as Error)?.message || "bootstrap install failed"}
+        </p>
+      )}
+    </Section>
   );
 }
 

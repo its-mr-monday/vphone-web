@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -274,4 +275,34 @@ func (c *Client) Reboot(ctx context.Context, userspace bool) error {
 		"userspace": userspace,
 	})
 	return err
+}
+
+// UploadFile streams a file to the guest via PUT /v1/files/content.
+func (c *Client) UploadFile(ctx context.Context, guestPath string, mode string, body io.Reader, size int64) error {
+	u := c.BaseURL + "/v1/files/content?path=" + url.QueryEscape(guestPath)
+	if mode != "" {
+		u += "&mode=" + url.QueryEscape(mode)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, u, body)
+	if err != nil {
+		return fmt.Errorf("create upload request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
+	if size > 0 {
+		httpReq.ContentLength = size
+	}
+
+	longClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := longClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("upload file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return fmt.Errorf("upload file: HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
 }

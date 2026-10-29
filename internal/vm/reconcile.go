@@ -71,20 +71,49 @@ func (m *Manager) reconcile() error {
 		switch v.Status {
 		case StatusBooting, StatusRunning, StatusStopping:
 			state := lpState[v.LaunchpadName]
-			if state == "running" && v.APIPort > 0 && v.APIToken != "" {
-				// Try to reconnect to the running VM's API.
-				client := upstream.NewClient(
-					fmt.Sprintf("http://127.0.0.1:%d", v.APIPort),
-					v.APIToken,
-				)
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, herr := client.Health(ctx)
-				cancel()
-				if herr == nil {
+			if state == "running" && v.APIToken != "" {
+				apiPort := v.APIPort
+
+				// Try to reconnect at the stored port first.
+				connected := false
+				if apiPort > 0 {
+					client := upstream.NewClient(
+						fmt.Sprintf("http://127.0.0.1:%d", apiPort),
+						v.APIToken,
+					)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_, herr := client.Health(ctx)
+					cancel()
+					connected = herr == nil
+				}
+
+				// If the stored port is stale, discover the actual port.
+				if !connected && m.launchpad != nil {
+					discovered := m.launchpad.FindVMAPIPort(v.LaunchpadName)
+					if discovered > 0 && discovered != apiPort {
+						m.log.Info("discovered new API port for running VM",
+							"vm", v.ID, "old_port", apiPort, "new_port", discovered)
+						client := upstream.NewClient(
+							fmt.Sprintf("http://127.0.0.1:%d", discovered),
+							v.APIToken,
+						)
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						_, herr := client.Health(ctx)
+						cancel()
+						if herr == nil {
+							apiPort = discovered
+							_ = m.store.setAPIPort(v.ID, apiPort, time.Now())
+							connected = true
+						}
+					}
+				}
+
+				if connected {
 					m.log.Info("reconnecting to running VM",
-						"vm", v.ID, "name", v.Name, "launchpad_name", v.LaunchpadName)
+						"vm", v.ID, "name", v.Name, "launchpad_name", v.LaunchpadName,
+						"api_port", apiPort)
 					rt := &runtime{
-						apiPort:  v.APIPort,
+						apiPort:  apiPort,
 						apiToken: v.APIToken,
 						tail:     newRingLog(200),
 					}
@@ -93,10 +122,11 @@ func (m *Manager) reconcile() error {
 					m.mu.Unlock()
 					_ = m.store.updateStatus(v.ID, StatusRunning, "", time.Now())
 					go m.superviseEvents(v.ID, rt)
+					go m.postBootServices(v)
 					continue
 				}
 				m.log.Warn("running VM API unreachable during reconcile",
-					"vm", v.ID, "err", herr)
+					"vm", v.ID, "stored_port", v.APIPort)
 			}
 			m.log.Info("resetting stale VM state", "vm", v.ID, "was", v.Status)
 			_ = m.store.updateStatus(v.ID, StatusStopped, "", time.Now())

@@ -36,6 +36,7 @@ type FridaStatus struct {
 	Installed bool   `json:"installed"`
 	Running   bool   `json:"running"`
 	Version   string `json:"version,omitempty"`
+	Port      int    `json:"port"`
 }
 
 // guestShellJS wraps a shell script into JavaScript that discovers the jbroot,
@@ -67,19 +68,24 @@ func guestEval(ctx context.Context, client *upstream.Client, script string) (str
 	return parseEvalResult(result)
 }
 
-func parseEvalResult(result json.RawMessage) (string, error) {
-	// The RPC response wraps the actual script result in an envelope:
-	//   {"crashed":false,"ok":true,"output":"","result":"<inner>"}
-	// Extract the inner result first.
+// unwrapRPCEnvelope extracts the inner "result" from the vphoned RPC envelope
+// {"crashed":false,"ok":true,"output":"","result":<inner>}. Returns the input
+// unchanged when no envelope is detected.
+func unwrapRPCEnvelope(raw json.RawMessage) json.RawMessage {
 	var envelope struct {
 		OK      bool            `json:"ok"`
 		Crashed bool            `json:"crashed"`
 		Output  string          `json:"output"`
 		Result  json.RawMessage `json:"result"`
 	}
-	if err := json.Unmarshal(result, &envelope); err == nil && envelope.Result != nil {
-		result = envelope.Result
+	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Result != nil {
+		return envelope.Result
 	}
+	return raw
+}
+
+func parseEvalResult(result json.RawMessage) (string, error) {
+	result = unwrapRPCEnvelope(result)
 
 	var evalResult struct {
 		Stdout   string `json:"stdout"`
@@ -129,7 +135,11 @@ func guestEvalStream(ctx context.Context, client *upstream.Client, script string
 // FridaGetStatus queries the guest for frida-server presence, version, and
 // whether it is currently running.
 func (m *Manager) FridaGetStatus(v VM) FridaStatus {
-	st := FridaStatus{}
+	port := v.FridaPort
+	if port == 0 {
+		port = 27042
+	}
+	st := FridaStatus{Port: port}
 	if v.Status != StatusRunning {
 		m.log.Debug("frida status: VM not running", "vm", v.ID, "status", v.Status)
 		return st
@@ -352,6 +362,17 @@ func (m *Manager) FridaProcesses(v VM) ([]FridaProcess, error) {
 	result, err := client.ProcessesList(context.Background(), "")
 	if err != nil {
 		return nil, fmt.Errorf("processes.list: %w", err)
+	}
+
+	// Unwrap the RPC envelope if present.
+	result = unwrapRPCEnvelope(result)
+
+	// The result may be {"count":N,"processes":[...]} or just [...].
+	var wrapper struct {
+		Processes json.RawMessage `json:"processes"`
+	}
+	if err := json.Unmarshal(result, &wrapper); err == nil && wrapper.Processes != nil {
+		result = wrapper.Processes
 	}
 
 	var raw []struct {

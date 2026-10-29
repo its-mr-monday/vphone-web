@@ -64,6 +64,18 @@ export interface GuestInfo {
   ip?: string;
   ios?: string;
   name?: string;
+  model?: string;
+  kernel?: string;
+  jailbreak?: string;
+  uptime?: number;
+  memory_mb?: number;
+  cpus?: number;
+  storage_gb?: number;
+  avail_gb?: number;
+  battery?: number;
+  screen_w?: number;
+  screen_h?: number;
+  screen_scale?: number;
 }
 
 /** Guest frida-server state. */
@@ -272,6 +284,16 @@ export const api = {
     api.rpc(id, "input.swipe", { x1: fromX, y1: fromY, x2: toX, y2: toY, duration_ms: durationMS }),
   typeText: (id: string, text: string) =>
     api.rpc(id, "input.type", { text }),
+  pasteText: (id: string, text: string) =>
+    api.rpc(id, "input.paste", { text }),
+  scroll: (id: string, phase: string, dx: number, dy: number, x?: number, y?: number) =>
+    api.rpc(id, "input.scroll", { phase, dx, dy, ...(x != null && y != null ? { x, y } : {}) }),
+  hidKey: (id: string, page: number, usage: number, down?: boolean) =>
+    api.rpc(id, "input.hid", down != null ? { page, usage, down } : { page, usage }),
+  hidHold: (id: string, page: number, usage: number, down: boolean) =>
+    api.rpc(id, "input.hid", { page, usage, long_press: true, down }),
+  inputKey: (id: string, name: string) =>
+    api.rpc(id, "input.key", { name }),
   button: (id: string, name: string) =>
     api.rpc(id, "input.button", { name }),
   captureScreenshot: async (id: string): Promise<Blob> => {
@@ -310,6 +332,12 @@ export const api = {
   deleteIPSW: (id: string) => request<void>(`/ipsws/${id}`, { method: "DELETE" }),
   // A worker node's IPSW library (proxied by the controller).
   nodeIPSWs: (nodeID: string) => request<IPSW[]>(`/nodes/${nodeID}/ipsws`),
+
+  // VNC Server (TrollVNC)
+  vncServerStatus: (id: string) =>
+    request<{ installed: boolean; running: boolean; port: number; error?: string }>(`/vms/${id}/vnc-server`),
+  vncServerInstall: (id: string) =>
+    request<{ ok: boolean; port: number; message: string }>(`/vms/${id}/vnc-server/install`, { method: "POST" }),
 
   // Snapshots
   listSnapshots: (vmID: string) => request<Snapshot[]>(`/vms/${vmID}/snapshots`),
@@ -464,8 +492,15 @@ export function terminalWebSocketURL(id: string): string {
 }
 
 /** Absolute ws:// URL for a VM's shell endpoint (upstream v2). */
-export function shellWebSocketURL(id: string): string {
-  return wsURL(`/api/v1/vms/${id}/shell`);
+export function shellWebSocketURL(id: string, program?: string): string {
+  const base = `/api/v1/vms/${id}/shell`;
+  if (program) return wsURL(`${base}?program=${encodeURIComponent(program)}`);
+  return wsURL(base);
+}
+
+/** Absolute ws:// URL for a VM's port tunnel (raw TCP over WebSocket). */
+export function portTunnelWebSocketURL(id: string, port: number): string {
+  return wsURL(`/api/v1/vms/${id}/ports/${port}`);
 }
 
 /** Absolute ws:// URL for a job's live log stream. */

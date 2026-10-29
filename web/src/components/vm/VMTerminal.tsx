@@ -5,17 +5,6 @@ import "@xterm/xterm/css/xterm.css";
 import { shellWebSocketURL } from "../../api/client";
 import { TerminalSquare } from "lucide-react";
 
-/**
- * VMTerminal renders an xterm.js terminal bridged to the VM's SSH port through
- * the server's WebSocket→TCP proxy. Keystrokes are sent as binary frames and
- * server bytes are written back. The terminal fits its container and re-fits on
- * resize; the socket auto-reconnects if it drops.
- *
- * Note: the proxy is a raw byte bridge to the device SSH port (per the project
- * design). A full interactive shell over raw SSH additionally requires the SSH
- * handshake; this component wires the transport end-to-end so the terminal is
- * live the moment a compatible endpoint answers.
- */
 export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -46,10 +35,9 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
     let closedByUs = false;
     let attempt = 0;
     let retryTimer: number | undefined;
+    let useProbe = false;
     const enc = new TextEncoder();
 
-    // Send the terminal dimensions to the server as a JSON control frame so the
-    // remote PTY resizes (keystrokes are sent as binary; resize as text JSON).
     const sendResize = () => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -58,7 +46,8 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
     };
 
     const connect = () => {
-      const ws = new WebSocket(shellWebSocketURL(vmId));
+      const program = useProbe ? undefined : "zsh";
+      const ws = new WebSocket(shellWebSocketURL(vmId, program));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -77,6 +66,13 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
               return;
             }
             if (msg.error) {
+              if (!useProbe && (msg.error.includes("no bootstrap") || msg.error.includes("no zsh"))) {
+                useProbe = true;
+                term.clear();
+                term.writeln(`\x1b[36m[no shell bootstrap — using probe session]\x1b[0m`);
+                ws.close();
+                return;
+              }
               term.writeln(`\x1b[31m[error: ${msg.error}]\x1b[0m`);
               return;
             }
@@ -88,14 +84,15 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
         if (wsRef.current === ws) wsRef.current = null;
         if (closedByUs) return;
         attempt += 1;
-        term.writeln(`\x1b[33m[disconnected — reconnecting…]\x1b[0m`);
-        retryTimer = window.setTimeout(connect, Math.min(1000 * 2 ** attempt, 8000));
+        if (!useProbe) {
+          term.writeln(`\x1b[33m[disconnected — reconnecting…]\x1b[0m`);
+        }
+        retryTimer = window.setTimeout(connect, useProbe ? 500 : Math.min(1000 * 2 ** attempt, 8000));
       };
       ws.onerror = () => ws.close();
     };
     connect();
 
-    // Send keystrokes to the backend.
     const dataSub = term.onData((data) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -103,7 +100,6 @@ export function VMTerminal({ vmId, active }: { vmId: string; active: boolean }) 
       }
     });
 
-    // Re-fit on container resize and notify the remote PTY of the new size.
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();

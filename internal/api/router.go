@@ -109,6 +109,8 @@ func (s *Server) Router(staticFS fs.FS) http.Handler {
 				r.With(user, remote).Post("/screenshot", s.screenshot)
 				r.With(user, remote).Post("/touch", s.touch)
 				r.With(user, remote).Post("/key", s.key)
+				r.With(user, remote).Get("/vnc-server", s.trollVNCStatus)
+				r.With(admin, remote).Post("/vnc-server/install", s.trollVNCInstall)
 				r.With(user, remote).Get("/snapshots", s.listSnapshots)
 				r.With(user, remote).Post("/snapshots", s.createSnapshot)
 				r.With(user, remote).Post("/snapshots/{name}/restore", s.restoreSnapshot)

@@ -177,9 +177,10 @@ func (l *Launchpad) VMStart(ctx context.Context, name string, opts VMStartOpts) 
 
 // VMLaunchResult holds the output from a direct vm launch.
 type VMLaunchResult struct {
-	Cmd      *exec.Cmd // the long-running VM process
-	APIAddr  string    // e.g. "http://127.0.0.1:8765"
-	APIToken string    // the token set via VPHONE_API_TOKEN
+	Cmd       *exec.Cmd  // the launcher process (exits quickly after spawning the VM)
+	VMProcess *os.Process // the actual vphone-vm process to supervise
+	APIAddr   string      // e.g. "http://127.0.0.1:8765"
+	APIToken  string      // the token set via VPHONE_API_TOKEN
 }
 
 // VMLaunch starts a VM by running the bundle's vphone-cli binary directly
@@ -212,15 +213,25 @@ func (l *Launchpad) VMLaunch(ctx context.Context, name string, opts VMStartOpts)
 		return nil, fmt.Errorf("start vm launch: %w", err)
 	}
 
-	// Poll for the vphone-vm child process's TCP listening port.
-	apiPort, err := l.pollAPIPort(ctx, cmd.Process.Pid)
+	// The vphone-cli launcher exits after spawning the vphone-vm process,
+	// so we wait for it to finish (non-blocking, just reap) in the background.
+	go cmd.Wait()
+
+	// Discover the API port by matching the vphone-vm process for this VM name.
+	apiPort, err := l.pollAPIPortByName(ctx, name)
 	if err != nil {
-		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("discover api port: %w", err)
 	}
 
+	// Find the actual vphone-vm process so the caller can supervise it.
+	vmPID := FindVMPID(name)
+	var vmProcess *os.Process
+	if vmPID > 0 {
+		vmProcess, _ = os.FindProcess(vmPID)
+	}
+
 	addr := fmt.Sprintf("http://127.0.0.1:%d", apiPort)
-	return &VMLaunchResult{Cmd: cmd, APIAddr: addr, APIToken: opts.APIToken}, nil
+	return &VMLaunchResult{Cmd: cmd, APIAddr: addr, APIToken: opts.APIToken, VMProcess: vmProcess}, nil
 }
 
 // bundleCLIPath resolves the active bundle's vphone-cli binary.
@@ -243,9 +254,10 @@ func (l *Launchpad) bundleCLIPath(ctx context.Context) (string, error) {
 	return path, nil
 }
 
-// pollAPIPort uses lsof to discover the TCP port the vphone-vm child process
-// is listening on. It checks all children of the given parent PID.
-func (l *Launchpad) pollAPIPort(ctx context.Context, parentPID int) (int, error) {
+// pollAPIPortByName polls for the TCP listen port of the vphone-vm process
+// whose command line contains the given VM name. This works regardless of
+// process parentage because vphone-cli forks vphone-vm and then exits.
+func (l *Launchpad) pollAPIPortByName(ctx context.Context, vmName string) (int, error) {
 	deadline := time.After(120 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -257,27 +269,65 @@ func (l *Launchpad) pollAPIPort(ctx context.Context, parentPID int) (int, error)
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		case <-ticker.C:
-			port := l.findVMListenPort()
+			port := l.FindVMAPIPort(vmName)
 			if port > 0 {
-				l.Logger.Info("discovered vphone-vm api port", "port", port)
+				l.Logger.Info("discovered vphone-vm api port", "port", port, "vm", vmName)
 				return port, nil
 			}
 		}
 	}
 }
 
-// findVMListenPort scans lsof output for a vphone-vm process listening on TCP.
-func (l *Launchpad) findVMListenPort() int {
+// FindVMPID returns the PID of the vphone-vm process for the given VM name.
+func FindVMPID(vmName string) int {
+	out, err := exec.Command("pgrep", "-f", "vphone-vm.*"+vmName).Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if p, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			return p
+		}
+	}
+	return 0
+}
+
+// FindVMAPIPort discovers the API listen port for a running VM identified by
+// its launchpad name. It finds the vphone-vm process whose command line
+// contains the VM name, then reads its TCP listen port via lsof.
+func (l *Launchpad) FindVMAPIPort(vmName string) int {
 	out, err := exec.Command("lsof", "-i", "-P", "-n").Output()
 	if err != nil {
 		return 0
 	}
+
+	// First find the PID(s) of vphone-vm processes for this specific VM.
+	psOut, err := exec.Command("pgrep", "-f", "vphone-vm.*"+vmName).Output()
+	if err != nil {
+		return 0
+	}
+	targetPIDs := make(map[int]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
+		if p, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			targetPIDs[p] = true
+		}
+	}
+	if len(targetPIDs) == 0 {
+		return 0
+	}
+
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.Contains(line, "vphone-vm") || !strings.Contains(line, "LISTEN") {
 			continue
 		}
-		// Format: vphone-vm PID user FDu IPv4 ... TCP 127.0.0.1:PORT (LISTEN)
 		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pid, perr := strconv.Atoi(fields[1])
+		if perr != nil || !targetPIDs[pid] {
+			continue
+		}
 		for _, f := range fields {
 			if strings.HasPrefix(f, "127.0.0.1:") || strings.HasPrefix(f, "*:") {
 				parts := strings.SplitN(f, ":", 2)

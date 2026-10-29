@@ -73,9 +73,6 @@ func (s *Server) terminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	program := r.URL.Query().Get("program")
-	if program == "" {
-		program = "zsh"
-	}
 	proxy.Terminal(w, r, proxy.TerminalConfig{
 		APIBaseURL: client.BaseURL,
 		APIToken:   client.Token,

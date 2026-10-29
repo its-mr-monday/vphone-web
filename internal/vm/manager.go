@@ -678,6 +678,10 @@ func (m *Manager) Boot(id string) (VM, error) {
 			return
 		}
 		m.log.Info("booted vm", "id", id, "name", v.Name)
+
+		// Reload any guest LaunchDaemons that live on /private/var
+		// (e.g. TrollVNC) — they aren't auto-loaded by launchd on boot.
+		go m.postBootServices(v)
 	}()
 
 	return v, nil
@@ -736,35 +740,46 @@ func (m *Manager) realBoot(v VM) error {
 	}
 
 	rt := &runtime{
-		tail:      newRingLog(200),
-		apiPort:   apiPort,
-		apiToken:  token,
-		vmProcess: launchResult.Cmd.Process,
+		tail:     newRingLog(200),
+		apiPort:  apiPort,
+		apiToken: token,
+	}
+	if launchResult.VMProcess != nil {
+		rt.vmProcess = launchResult.VMProcess
 	}
 
 	m.mu.Lock()
 	m.runtimes[v.ID] = rt
 	m.mu.Unlock()
 
-	// Supervise the VM process — mark ERROR if it exits unexpectedly.
+	// Supervise the actual vphone-vm process — mark ERROR if it exits unexpectedly.
+	// The vphone-cli launcher exits immediately after spawning vphone-vm, so we
+	// watch the VM process directly via periodic liveness checks.
 	go func() {
-		err := launchResult.Cmd.Wait()
-		m.log.Warn("vm process exited", "vm", v.ID, "err", err)
-
-		m.mu.Lock()
-		delete(m.runtimes, v.ID)
-		m.mu.Unlock()
-
-		cur, getErr := m.store.get(v.ID)
-		if getErr != nil {
-			return
-		}
-		if cur.Status == StatusRunning || cur.Status == StatusBooting {
-			msg := "vm process exited unexpectedly"
-			if err != nil {
-				msg = err.Error()
+		lpName := v.LaunchpadName
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			// Check if the vphone-vm process is still alive.
+			pid := upstream.FindVMPID(lpName)
+			if pid > 0 {
+				continue
 			}
-			_ = m.store.updateStatus(v.ID, StatusError, msg, time.Now())
+			m.log.Warn("vm process exited", "vm", v.ID)
+
+			m.mu.Lock()
+			delete(m.runtimes, v.ID)
+			m.mu.Unlock()
+
+			cur, getErr := m.store.get(v.ID)
+			if getErr != nil {
+				return
+			}
+			if cur.Status == StatusRunning || cur.Status == StatusBooting {
+				_ = m.store.updateStatus(v.ID, StatusError,
+					"VM process exited unexpectedly", time.Now())
+			}
+			return
 		}
 	}()
 
@@ -772,6 +787,59 @@ func (m *Manager) realBoot(v VM) error {
 	go m.superviseEvents(v.ID, rt)
 
 	return nil
+}
+
+// postBootServices waits for the guest API to become reachable, then loads
+// any LaunchDaemons that live on writable storage (not auto-loaded by launchd).
+func (m *Manager) postBootServices(v VM) {
+	const trollVNCPlistPath = "/private/var/trollvnc/trollvnc.plist"
+	const trollVNCBinPath = "/private/var/trollvnc/trollvncserver"
+
+	// Wait up to 60s for the guest API.
+	var client *upstream.Client
+	for i := 0; i < 12; i++ {
+		time.Sleep(5 * time.Second)
+		cur, err := m.store.get(v.ID)
+		if err != nil || cur.Status != StatusRunning {
+			return
+		}
+		client = m.APIClient(cur)
+		if client == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, err = client.Health(ctx)
+		cancel()
+		if err == nil {
+			break
+		}
+		client = nil
+	}
+	if client == nil {
+		return
+	}
+
+	// Check if TrollVNC is installed.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := client.RPC(ctx, "files.read", map[string]any{
+		"path":   trollVNCBinPath,
+		"binary": true,
+		"limit":  1,
+	})
+	if err != nil {
+		return // not installed
+	}
+
+	// Load the daemon plist.
+	_, err = client.RPC(ctx, "services.load", map[string]any{
+		"paths": []string{trollVNCPlistPath},
+	})
+	if err != nil {
+		m.log.Warn("failed to auto-start TrollVNC", "vm", v.ID, "err", err)
+	} else {
+		m.log.Info("auto-started TrollVNC", "vm", v.ID)
+	}
 }
 
 // parseAPIPortFromAddr extracts the port from an address like "http://127.0.0.1:8765".
@@ -966,29 +1034,24 @@ func (m *Manager) Stop(id string) error {
 		}
 	}
 
-	// Stop the VM process: kill the process group (vphone-cli + vphone-vm
-	// children share a group via Setpgid), fall back to launchpad.
-	if rt != nil && rt.vmProcess != nil {
-		// Send SIGINT to the entire process group so vphone-vm and its
-		// Virtualization.framework children also receive the signal.
-		pgid := rt.vmProcess.Pid
-		_ = syscall.Kill(-pgid, syscall.SIGINT)
-		done := make(chan struct{})
-		go func() {
-			rt.vmProcess.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(15 * time.Second):
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			<-done
-		}
-	} else if m.launchpad != nil && v.LaunchpadName != "" {
+	// Stop the VM process: try launchpad stop first (graceful), then
+	// SIGTERM the vphone-vm process directly if launchpad isn't available.
+	if m.launchpad != nil && v.LaunchpadName != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := m.launchpad.VMStop(ctx, v.LaunchpadName); err != nil {
-			m.log.Warn("launchpad vm stop failed", "vm", id, "err", err)
+			m.log.Warn("launchpad vm stop failed, killing process directly", "vm", id, "err", err)
+			if pid := upstream.FindVMPID(v.LaunchpadName); pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGTERM)
+				time.Sleep(2 * time.Second)
+				if upstream.FindVMPID(v.LaunchpadName) > 0 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			}
+		}
+	} else if v.LaunchpadName != "" {
+		if pid := upstream.FindVMPID(v.LaunchpadName); pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
 	}
 
