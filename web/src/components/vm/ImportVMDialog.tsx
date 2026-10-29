@@ -4,7 +4,7 @@ import { ApiError, type Variant, type VM } from "../../api/client";
 import { useImportVM } from "../../hooks/useVM";
 import { Button } from "../ui/Button";
 
-const VARIANTS: Variant[] = ["regular", "dev", "jb", "exp"];
+const VARIANTS: Variant[] = ["standard", "experimental", "minimal"];
 
 /**
  * ImportVMDialog adopts an already-provisioned VM directory (e.g. one built
@@ -15,7 +15,7 @@ export function ImportVMDialog({ onClose, onImported }: { onClose: () => void; o
   const importVM = useImportVM();
   const [name, setName] = useState("");
   const [vmDir, setVmDir] = useState("");
-  const [variant, setVariant] = useState<Variant>("jb");
+  const [variant, setVariant] = useState<Variant>("standard");
   const [iosVersion, setIosVersion] = useState("");
   const [error, setError] = useState<string | null>(null);
 

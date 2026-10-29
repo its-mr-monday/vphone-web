@@ -1,7 +1,7 @@
 package vm
 
 import (
-	"os/exec"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +24,15 @@ const (
 	StatusError      Status = "ERROR"
 )
 
-// Variant selects a firmware flavor and its corresponding Make targets.
+// Variant selects a firmware patch preset passed to `fw patch --preset`.
 type Variant string
 
 const (
+	VariantStandard    Variant = "standard"
+	VariantExperimental Variant = "experimental"
+	VariantMinimal     Variant = "minimal"
+
+	// Legacy aliases — accepted on input, mapped to a real preset.
 	VariantRegular Variant = "regular"
 	VariantDev     Variant = "dev"
 	VariantJB      Variant = "jb"
@@ -36,10 +41,26 @@ const (
 
 // validVariants is the set of accepted variant values.
 var validVariants = map[Variant]bool{
+	VariantStandard:     true,
+	VariantExperimental: true,
+	VariantMinimal:      true,
+	// Legacy values still accepted.
 	VariantRegular: true,
 	VariantDev:     true,
 	VariantJB:      true,
 	VariantEXP:     true,
+}
+
+// NormalizeVariant maps legacy variant names to their CLI preset equivalents.
+func NormalizeVariant(v Variant) Variant {
+	switch v {
+	case VariantRegular, VariantDev, VariantJB:
+		return VariantStandard
+	case VariantEXP:
+		return VariantExperimental
+	default:
+		return v
+	}
 }
 
 // Default guest screen geometry (iPhone17,3 / vphone600). Touch coordinates on
@@ -93,14 +114,19 @@ type VM struct {
 	Memory           int       `json:"memory"`    // MiB
 	DiskSize         int       `json:"disk_size"` // MiB
 	PortBlockBase    int       `json:"port_block_base"`
-	// FridaPort overrides the host port forwarded to the guest's frida-server.
-	// 0 means "use the default" (port block base + 4).
-	FridaPort int    `json:"frida_port"`
-	VMDir     string `json:"vm_dir"`
+	FridaPort        int       `json:"frida_port"`
+	VMDir            string    `json:"vm_dir"`
 	PID              int       `json:"pid,omitempty"`
 	ErrorMessage     string    `json:"error_message,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+
+	// Upstream v2 fields (vphone-cli v2.13.8+).
+	APIPort       int    `json:"api_port,omitempty"`
+	APIToken      string `json:"api_token,omitempty"`
+	DeviceType    string `json:"device_type,omitempty"`
+	LaunchpadName string `json:"launchpad_name,omitempty"`
+	BundleVersion string `json:"bundle_version,omitempty"`
 
 	// Derived fields, included for client convenience.
 	Ports        PortBlock `json:"ports"`
@@ -109,46 +135,29 @@ type VM struct {
 	VNCPassword  string    `json:"vnc_password"`
 }
 
-// runtime holds the live process handles for a booted VM. It is kept in memory
-// only (never persisted) and guarded by its own mutex.
+// IsUpstreamVM returns true for VMs managed via the upstream v2 API
+// (launchpad-cli + vphoned) rather than the legacy Make/socket path.
+func (v *VM) IsUpstreamVM() bool {
+	return v.APIToken != ""
+}
+
+// runtime holds live state for a booted VM. It is kept in memory only (never
+// persisted) and guarded by its own mutex.
 type runtime struct {
-	mu  sync.Mutex
-	cmd *exec.Cmd // the vphone-cli `make boot` process
-	// stopping is set when a graceful stop is in progress so the process-exit
-	// watcher does not misclassify the exit as a crash.
+	mu       sync.Mutex
 	stopping bool
-	// tail holds the last few lines of boot output for error surfacing.
-	tail *ringLog
-	// tunnelStop signals the resilient tunnel supervisors to shut down.
-	tunnelStop chan struct{}
-	tunnelOnce sync.Once
-	tunnelWG   sync.WaitGroup
-	// The Frida forward has its own stop channel so its port can be changed live
-	// (restart just this forward) without disturbing the core tunnels.
-	fridaStop chan struct{}
-	fridaWG   sync.WaitGroup
-}
+	tail     *ringLog
 
-// stopTunnelSupervisors signals all tunnel goroutines to exit (idempotent).
-func (r *runtime) stopTunnelSupervisors() {
-	r.tunnelOnce.Do(func() {
-		if r.tunnelStop != nil {
-			close(r.tunnelStop)
-		}
-	})
-	r.stopFridaForward()
-}
+	// Upstream v2: API endpoint for this running VM's vphoned instance.
+	apiPort  int
+	apiToken string
 
-// stopFridaForward signals just the Frida forward to exit and clears its stop
-// channel so it can be relaunched (for a live port change).
-func (r *runtime) stopFridaForward() {
-	r.mu.Lock()
-	stop := r.fridaStop
-	r.fridaStop = nil
-	r.mu.Unlock()
-	if stop != nil {
-		close(stop)
-	}
+	// vmProcess is the VM process (from exec vm launch). Nil for VMs
+	// started outside our control (e.g. reconciled from launchpad).
+	vmProcess *os.Process
+
+	// Cancel function to tear down the event supervision goroutine.
+	cancelSupervise func()
 }
 
 // ringLog is a tiny bounded line buffer for capturing recent process output.

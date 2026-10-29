@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/cyberm-tech/vphone-web/internal/vm"
 	"github.com/go-chi/chi/v5"
@@ -56,6 +57,7 @@ func structToMap(v any) map[string]any {
 type createVMRequest struct {
 	Name             string `json:"name"`
 	Variant          string `json:"variant"`
+	DeviceType       string `json:"device_type"`
 	IOSVersion       string `json:"ios_version"`
 	IPSWID           string `json:"ipsw_id"`
 	CloudOSIPSWID    string `json:"cloudos_ipsw_id"`
@@ -104,6 +106,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	v, err := s.vms.Create(vm.CreateParams{
 		Name:             req.Name,
 		Variant:          vm.Variant(req.Variant),
+		DeviceType:       req.DeviceType,
 		IOSVersion:       req.IOSVersion,
 		IPSWID:           req.IPSWID,
 		CloudOSIPSWID:    req.CloudOSIPSWID,
@@ -298,6 +301,8 @@ func (s *Server) restartVM(w http.ResponseWriter, r *http.Request) {
 	if err := s.vms.Stop(id); err != nil && !errors.Is(err, vm.ErrNotFound) {
 		s.log.Debug("restart: stop phase", "id", id, "err", err)
 	}
+	// Brief pause so file locks (shader cache) are released before reboot.
+	time.Sleep(2 * time.Second)
 	v, err := s.vms.Boot(id)
 	if errors.Is(err, vm.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "VM not found")

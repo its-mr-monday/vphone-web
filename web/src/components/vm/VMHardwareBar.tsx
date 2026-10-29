@@ -11,11 +11,11 @@ export function VMHardwareBar({ vmId, disabled }: { vmId: string; disabled: bool
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function pressKey(key: string) {
+  async function pressButton(name: string) {
     setError(null);
-    setBusy(key);
+    setBusy(name);
     try {
-      await api.key(vmId, key);
+      await api.button(vmId, name);
     } catch (e) {
       setError(e instanceof Error ? e.message : "action failed");
     } finally {
@@ -27,18 +27,15 @@ export function VMHardwareBar({ vmId, disabled }: { vmId: string; disabled: bool
     setError(null);
     setBusy("screenshot");
     try {
-      // Prefer capturing the live noVNC canvas: it's the real guest framebuffer
-      // and it works for headless VMs (which have no host capture view). Fall back
-      // to the server-side capture only if the canvas isn't available.
+      // Prefer capturing the live display canvas (WebCodecs stream). Fall back
+      // to the RPC screenshot method if the canvas isn't available.
       let blob: Blob | null = null;
-      const canvas = document.querySelector<HTMLCanvasElement>("[data-vm-display] canvas");
+      const canvas = document.querySelector<HTMLCanvasElement>("[data-display-canvas]");
       if (canvas && canvas.width > 0 && canvas.height > 0) {
         blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
       }
       if (!blob) {
-        const res = await fetch(api.screenshotURL(vmId), { method: "POST" });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "capture failed");
-        blob = await res.blob();
+        blob = await api.captureScreenshot(vmId);
       }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -55,10 +52,10 @@ export function VMHardwareBar({ vmId, disabled }: { vmId: string; disabled: bool
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <PillButton label="Home" icon={<Home className="h-4 w-4" />} disabled={disabled} busy={busy === "home"} onClick={() => pressKey("home")} />
-      <PillButton label="Lock" icon={<Lock className="h-4 w-4" />} disabled={disabled} busy={busy === "lock"} onClick={() => pressKey("lock")} />
-      <PillButton label="Vol +" icon={<Volume2 className="h-4 w-4" />} disabled={disabled} busy={busy === "volume_up"} onClick={() => pressKey("volume_up")} />
-      <PillButton label="Vol −" icon={<Volume1 className="h-4 w-4" />} disabled={disabled} busy={busy === "volume_down"} onClick={() => pressKey("volume_down")} />
+      <PillButton label="Home" icon={<Home className="h-4 w-4" />} disabled={disabled} busy={busy === "home"} onClick={() => pressButton("home")} />
+      <PillButton label="Lock" icon={<Lock className="h-4 w-4" />} disabled={disabled} busy={busy === "power"} onClick={() => pressButton("power")} />
+      <PillButton label="Vol +" icon={<Volume2 className="h-4 w-4" />} disabled={disabled} busy={busy === "volume_up"} onClick={() => pressButton("volume_up")} />
+      <PillButton label="Vol −" icon={<Volume1 className="h-4 w-4" />} disabled={disabled} busy={busy === "volume_down"} onClick={() => pressButton("volume_down")} />
       <div className="mx-1 h-5 w-px bg-border" />
       <PillButton label="Screenshot" icon={<Camera className="h-4 w-4" />} disabled={disabled} busy={busy === "screenshot"} onClick={screenshot} />
       {error && <span className="font-mono text-[11px] text-error">{error}</span>}

@@ -12,6 +12,18 @@ var ErrNotFound = errors.New("vm not found")
 
 const rfc3339 = time.RFC3339Nano
 
+// parseFlexTime parses a timestamp string trying RFC3339 first, then falling
+// back to SQLite's default "YYYY-MM-DD HH:MM:SS" format (UTC).
+func parseFlexTime(s string) (time.Time, error) {
+	if t, err := time.Parse(rfc3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unrecognized time format: %q", s)
+}
+
 // store wraps SQLite persistence for VMs.
 type store struct {
 	db *sql.DB
@@ -26,15 +38,17 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 	if err := s.Scan(
 		&v.ID, &v.Name, &v.Status, &v.Variant, &v.IOSVersion, &v.IPSWID,
 		&v.NetworkMode, &v.NetworkInterface, &v.CPU, &v.Memory, &v.DiskSize,
-		&v.PortBlockBase, &v.FridaPort, &v.VMDir, &v.PID, &v.ErrorMessage, &createdAt, &updatedAt,
+		&v.PortBlockBase, &v.FridaPort, &v.VMDir, &v.PID, &v.ErrorMessage,
+		&v.APIPort, &v.APIToken, &v.DeviceType, &v.LaunchpadName, &v.BundleVersion,
+		&createdAt, &updatedAt,
 	); err != nil {
 		return VM{}, err
 	}
 	var err error
-	if v.CreatedAt, err = time.Parse(rfc3339, createdAt); err != nil {
+	if v.CreatedAt, err = parseFlexTime(createdAt); err != nil {
 		return VM{}, fmt.Errorf("parse created_at: %w", err)
 	}
-	if v.UpdatedAt, err = time.Parse(rfc3339, updatedAt); err != nil {
+	if v.UpdatedAt, err = parseFlexTime(updatedAt); err != nil {
 		return VM{}, fmt.Errorf("parse updated_at: %w", err)
 	}
 	v.Ports = blockFor(v.PortBlockBase)
@@ -49,16 +63,18 @@ func scanVM(s interface{ Scan(...any) error }) (VM, error) {
 
 const vmColumns = `id, name, status, variant, ios_version, ipsw_id, network_mode,
 	network_interface, cpu, memory, disk_size, port_block_base, frida_port, vm_dir, pid,
-	error_message, created_at, updated_at`
+	error_message, api_port, api_token, device_type, launchpad_name, bundle_version,
+	created_at, updated_at`
 
 // insert persists a new VM.
 func (s *store) insert(v VM) error {
 	_, err := s.db.Exec(
 		`INSERT INTO vms (`+vmColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.ID, v.Name, v.Status, v.Variant, v.IOSVersion, v.IPSWID, v.NetworkMode,
 		v.NetworkInterface, v.CPU, v.Memory, v.DiskSize, v.PortBlockBase, v.FridaPort, v.VMDir,
-		v.PID, v.ErrorMessage, v.CreatedAt.Format(rfc3339), v.UpdatedAt.Format(rfc3339),
+		v.PID, v.ErrorMessage, v.APIPort, v.APIToken, v.DeviceType, v.LaunchpadName, v.BundleVersion,
+		v.CreatedAt.Format(rfc3339), v.UpdatedAt.Format(rfc3339),
 	)
 	if err != nil {
 		return fmt.Errorf("insert vm: %w", err)
@@ -120,6 +136,36 @@ func (s *store) setPID(id string, pid int, at time.Time) error {
 		`UPDATE vms SET pid = ?, updated_at = ? WHERE id = ?`,
 		pid, at.Format(rfc3339), id)
 	return err
+}
+
+// setAPIPort persists the vphoned API port for a running upstream VM.
+func (s *store) setAPIPort(id string, port int, at time.Time) error {
+	res, err := s.db.Exec(
+		`UPDATE vms SET api_port = ?, updated_at = ? WHERE id = ?`,
+		port, at.Format(rfc3339), id)
+	if err != nil {
+		return fmt.Errorf("update api port: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// setAPIToken persists the vphoned API bearer token for a VM.
+func (s *store) setAPIToken(id string, token string, at time.Time) error {
+	res, err := s.db.Exec(
+		`UPDATE vms SET api_token = ?, updated_at = ? WHERE id = ?`,
+		token, at.Format(rfc3339), id)
+	if err != nil {
+		return fmt.Errorf("update api token: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // updateConfig persists user-editable settings (only valid while STOPPED).

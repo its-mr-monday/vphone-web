@@ -2,66 +2,42 @@ package vm
 
 import "testing"
 
-func TestVariantTargetMapping(t *testing.T) {
-	cases := []struct {
-		variant Variant
-		fwPatch string
-		cfw     string
-	}{
-		{VariantRegular, "fw_patch", "cfw_install"},
-		{VariantDev, "fw_patch_dev", "cfw_install_dev"},
-		{VariantJB, "fw_patch_jb", "cfw_install_jb"},
-		{VariantEXP, "fw_patch_exp", "cfw_install_exp"},
-	}
-	for _, c := range cases {
-		if got := fwPatchTarget(c.variant); got != c.fwPatch {
-			t.Errorf("%s fwPatchTarget = %q, want %q", c.variant, got, c.fwPatch)
+func TestVariantValues(t *testing.T) {
+	for _, v := range []Variant{VariantStandard, VariantExperimental, VariantMinimal, VariantRegular, VariantDev, VariantJB, VariantEXP} {
+		if !validVariants[v] {
+			t.Errorf("%q should be valid", v)
 		}
-		if got := cfwInstallTarget(c.variant); got != c.cfw {
-			t.Errorf("%s cfwInstallTarget = %q, want %q", c.variant, got, c.cfw)
+	}
+	if validVariants["bogus"] {
+		t.Error("'bogus' should not be a valid variant")
+	}
+}
+
+func TestNormalizeVariant(t *testing.T) {
+	cases := []struct{ in, want Variant }{
+		{VariantRegular, VariantStandard},
+		{VariantDev, VariantStandard},
+		{VariantJB, VariantStandard},
+		{VariantEXP, VariantExperimental},
+		{VariantStandard, VariantStandard},
+		{VariantExperimental, VariantExperimental},
+		{VariantMinimal, VariantMinimal},
+	}
+	for _, tc := range cases {
+		got := NormalizeVariant(tc.in)
+		if got != tc.want {
+			t.Errorf("NormalizeVariant(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
 
-func TestDiskGiB(t *testing.T) {
-	cases := []struct{ mib, want int }{
-		{16384, 16}, {65536, 64}, {512, 1}, {0, 1}, {1024, 1},
+func TestIsUpstreamVM(t *testing.T) {
+	legacy := VM{APIToken: ""}
+	if legacy.IsUpstreamVM() {
+		t.Error("legacy VM without APIToken should not be upstream")
 	}
-	for _, c := range cases {
-		if got := diskGiB(c.mib); got != c.want {
-			t.Errorf("diskGiB(%d) = %d, want %d", c.mib, got, c.want)
-		}
-	}
-}
-
-func TestIsDFUReady(t *testing.T) {
-	ready := []string{
-		"[vphone] VM started in DFU mode - connect with irecovery",
-		"Entering recovery mode",
-		"device is now in DFU mode",
-	}
-	for _, l := range ready {
-		if !isDFUReady(l) {
-			t.Errorf("expected DFU-ready for %q", l)
-		}
-	}
-	if isDFUReady("booting normally") {
-		t.Error("false positive DFU-ready match")
-	}
-}
-
-func TestKeyAliasMapping(t *testing.T) {
-	s := &Socket{}
-	// Unknown key errors; known aliases don't (they fail later at dial, not here).
-	if err := s.Key("nonsense"); err == nil {
-		t.Error("expected error for unknown key")
-	}
-	for _, k := range []string{"home", "lock", "volume_up", "volume_down"} {
-		if _, ok := keyAlias[k]; !ok {
-			t.Errorf("expected alias for %q", k)
-		}
-	}
-	if keyAlias["lock"] != "power" {
-		t.Errorf("lock should map to power, got %q", keyAlias["lock"])
+	upstream := VM{APIToken: "abc123"}
+	if !upstream.IsUpstreamVM() {
+		t.Error("VM with APIToken should be upstream")
 	}
 }
