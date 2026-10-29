@@ -22,6 +22,13 @@ everything from first run to running a cluster of hosts.
 11. [Finding firmware](11-finding-firmware.md) — where to get iPhone IPSWs + CloudOS/PCC images
 12. [Deployment](12-deployment.md) — running the server durably (start script + fleet LaunchAgent) and headless VMs
 
+## AI integration
+
+vphone-web includes an MCP server (33 tools) and a comprehensive AI skill guide
+([`SKILL.md`](../SKILL.md)) for autonomous iOS device control. See
+[the main README's AI Integration section](../README.md#ai-integration) for
+setup, tool reference, and example usage.
+
 ## The 60-second version
 
 ```bash

@@ -53,18 +53,23 @@ enumeration via `frida-ps`:
   from the Frida APT repo as a streamed job, start/stop, version/status) and
   enumerates running applications live via the host `frida-ps` over a forwarded
   frida port — the foundation for dynamic instrumentation.
-- **MCP server** — a **standalone** binary (`make mcp` → `bin/vphone-mcp`) speaking
-  the Model Context Protocol on stdio, so an AI agent can drive the lab: list/boot
-  VMs, capture the screen as an image, tap/swipe/press hardware keys, run shell
-  commands on the guest (`/exec`), enumerate apps via Frida, and manage snapshots.
-  It is a pure REST *client* — it embeds no frontend, never opens the database, and
-  can target a local **or remote** instance, so it never contends with the server.
-  Config is its own (`~/.config/vphone-mcp/config.toml`, optional — see
-  `config.mcp.example.toml`); with no config it targets a local server.
+- **MCP server (33 tools)** — a standalone binary (`make mcp` → `bin/vphone-mcp`)
+  speaking the Model Context Protocol on stdio. Gives AI agents full control of
+  the lab: VM lifecycle, screen capture, tap/swipe/type/scroll, hardware keys,
+  root shell exec, file push/pull, clipboard, Frida management (install/start/stop,
+  process enumeration), VNC status, snapshot create/restore/delete, IPSW library,
+  and system status. Pure REST client — no database, no frontend, targets local or
+  remote instances. See the **AI Integration** section below for setup.
   ```bash
   make mcp
   claude mcp add vphone -- /path/to/bin/vphone-mcp
   ```
+- **AI SKILL guide** — [`SKILL.md`](SKILL.md) is a ~1000-line reference that teaches
+  an AI agent everything it needs to operate virtual iPhones: all 33 MCP tools with
+  usage examples, the see-act loop for UI automation, shell research patterns, Frida
+  workflows, snapshot strategy, VM provisioning, and vulnerability research
+  methodology. Drop it into an agent's context alongside the MCP server for a
+  fully autonomous iOS research assistant.
 - **Guest shell exec** — `POST /vms/:id/exec` runs a single command over SSH and
   returns stdout/stderr/exit code (the request/response counterpart to the
   interactive terminal), for scripting and automation.
@@ -157,6 +162,80 @@ In-depth guides live in [`docs/`](docs/README.md):
 - [Managing VMs](docs/04-managing-vms.md) · [Frida & debugging](docs/05-frida-debugging.md)
 - [Configuration reference](docs/06-configuration.md) · [Clustering](docs/07-clustering.md) · [Access control](docs/08-access-control.md)
 - [API reference](docs/09-api-reference.md) · [Troubleshooting](docs/10-troubleshooting.md)
+
+## AI Integration
+
+vphone-web ships with an MCP server and a comprehensive AI skill guide, designed
+to let AI agents autonomously operate virtual iPhones for security research, app
+testing, and device instrumentation.
+
+### Setup
+
+```bash
+# Build the MCP server binary
+make mcp
+
+# Register with Claude Code
+claude mcp add vphone -- /path/to/bin/vphone-mcp
+
+# Or configure in .claude/settings.json for a project:
+{
+  "mcpServers": {
+    "vphone": {
+      "command": "go",
+      "args": ["run", "./cmd/vphone-mcp/main.go"],
+      "env": { "VPHONE_MCP_URL": "http://127.0.0.1:8099" }
+    }
+  }
+}
+```
+
+No config file needed when running locally — the MCP server auto-connects to
+`http://127.0.0.1:8099`. For a remote instance, set `VPHONE_MCP_URL` or create
+`~/.config/vphone-mcp/config.toml` (see `config.mcp.example.toml`).
+
+### MCP Tools (33 total)
+
+| Category | Tools |
+|----------|-------|
+| **Fleet** | `list_vms`, `get_vm`, `create_vm`, `boot_vm`, `stop_vm`, `restart_vm`, `system_status` |
+| **Display & Input** | `screenshot`, `tap`, `swipe`, `scroll`, `type_text`, `press_key` |
+| **Shell & Files** | `exec`, `rpc`, `pull_file`, `push_file`, `clipboard_get`, `clipboard_set` |
+| **Frida** | `frida_status`, `frida_start`, `frida_stop`, `frida_processes` |
+| **VNC** | `vnc_status`, `vnc_install` |
+| **Snapshots** | `list_snapshots`, `create_snapshot`, `restore_snapshot`, `delete_snapshot` |
+| **IPSW** | `list_ipsws`, `device_info` |
+
+All tools are prefixed with `vphone_` in the MCP namespace.
+
+### SKILL.md
+
+[`SKILL.md`](SKILL.md) is the AI integration guide (~1000 lines). It covers:
+
+- **All 33 tools** with parameters, return types, and usage examples
+- **See-act loop** — screenshot → analyze → tap/swipe → screenshot for UI automation
+- **Shell research patterns** — binary analysis, crash monitoring, dtrace, class-dump
+- **Frida workflows** — hooking, fuzzing, process enumeration
+- **Snapshot strategy** — when to snapshot, naming conventions, recovery
+- **VM provisioning pipeline** — IPSW selection, variant strategy, the full create flow
+- **Vulnerability research methodology** — attack surface enumeration, crash triage,
+  primitive development, three-stage validation (Experimental → Standard → Physical)
+
+Add SKILL.md to your agent's context (via CLAUDE.md reference or direct inclusion)
+alongside the MCP server for a fully autonomous iOS research setup.
+
+### Example: Autonomous Research Agent
+
+```bash
+cd ~/repos/ios-research   # project with .claude/settings.json pointing to vphone MCP
+
+# CLAUDE.md references SKILL.md + PROMPT.md + GUIDELINES.md
+# Agent has full MCP access to the lab
+
+claude "Read PROMPT.md and GUIDELINES.md. Start with ImageIO attack surface —
+enumerate parsers, hook with Frida, fuzz with malformed inputs. Goal is
+reliable r/w primitives, not just crashes."
+```
 
 ## Configuration
 
