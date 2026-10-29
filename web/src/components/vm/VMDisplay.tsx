@@ -54,8 +54,8 @@ export function VMDisplay({ vm }: { vm: VM }) {
     const end = toVMCoords(e.clientX, e.clientY);
     if (!end) return;
     const dist = Math.hypot(end.x - start.x, end.y - start.y);
-    if (dist > 30) {
-      const ms = Math.min(600, Math.max(120, Date.now() - start.t));
+    if (dist > 15) {
+      const ms = Math.min(400, Math.max(50, Date.now() - start.t));
       api.swipe(vm.id, start.x, start.y, end.x, end.y, ms).catch(() => {});
     } else {
       api.tap(vm.id, end.x, end.y).catch(() => {});

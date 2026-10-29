@@ -87,8 +87,10 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
   const requestIdRef = useRef(0);
   const pendingRef = useRef(0);
   const codecRef = useRef<string>("");
+  const activeRef = useRef(true);
   const reconnectTimer = useRef<number>(0);
   const keyFrameTimer = useRef<number>(0);
+  const pollTimer = useRef<number>(0);
   const fpsCountRef = useRef(0);
   const fpsIntervalRef = useRef<number>(0);
 
@@ -102,9 +104,11 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
   const [measuredFps, setMeasuredFps] = useState(0);
   const [error, setError] = useState<string | undefined>();
 
+  const MAX_IN_FLIGHT = 8;
+
   const sendRequest = useCallback((ws: WebSocket, key: boolean) => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (pendingRef.current >= 8) return;
+    if (pendingRef.current >= MAX_IN_FLIGHT) return;
     pendingRef.current += 1;
     requestIdRef.current += 1;
     const msg = {
@@ -117,6 +121,22 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
     };
     ws.send(JSON.stringify(msg));
   }, [fps, bitrate, maxWidth, maxHeight]);
+
+  const fillPipeline = useCallback((ws: WebSocket) => {
+    while (pendingRef.current < MAX_IN_FLIGHT && ws.readyState === WebSocket.OPEN) {
+      sendRequest(ws, false);
+    }
+  }, [sendRequest]);
+
+  const schedulePoll = useCallback((ws: WebSocket) => {
+    if (pollTimer.current) return;
+    pollTimer.current = window.setTimeout(() => {
+      pollTimer.current = 0;
+      if (ws.readyState === WebSocket.OPEN) {
+        sendRequest(ws, false);
+      }
+    }, Math.ceil(1000 / fps));
+  }, [sendRequest, fps]);
 
   useEffect(() => {
     if (!enabled) {
@@ -133,9 +153,11 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
       if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current);
       if (keyFrameTimer.current) window.clearInterval(keyFrameTimer.current);
       if (fpsIntervalRef.current) window.clearInterval(fpsIntervalRef.current);
+      if (pollTimer.current) window.clearTimeout(pollTimer.current);
       reconnectTimer.current = 0;
       keyFrameTimer.current = 0;
       fpsIntervalRef.current = 0;
+      pollTimer.current = 0;
       if (ws) {
         try { ws.close(); } catch { /* ignore */ }
         wsRef.current = null;
@@ -200,6 +222,7 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
       ws.onopen = () => {
         if (cancelled) return;
         sendRequest(ws!, true);
+        fillPipeline(ws!);
 
         keyFrameTimer.current = window.setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -230,7 +253,8 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
         }
 
         if (header.status === "unchanged" || header.status === "dropped") {
-          sendRequest(ws!, false);
+          activeRef.current = false;
+          schedulePoll(ws!);
           return;
         }
 
@@ -276,8 +300,15 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
           }
         }
 
-        // Request next frame
-        sendRequest(ws!, false);
+        // Got a real frame — switch to active mode and fill pipeline for throughput
+        if (!activeRef.current) {
+          activeRef.current = true;
+          if (pollTimer.current) {
+            window.clearTimeout(pollTimer.current);
+            pollTimer.current = 0;
+          }
+        }
+        fillPipeline(ws!);
       };
 
       ws.onclose = () => {
@@ -299,7 +330,7 @@ export function useDisplayStream(opts: DisplayStreamOptions): DisplayStreamState
 
     start();
     return cleanup;
-  }, [vmId, enabled, sendRequest]);
+  }, [vmId, enabled, sendRequest, fillPipeline, schedulePoll]);
 
   return {
     status,
